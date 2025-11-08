@@ -1,0 +1,5 @@
+{
+  "name": "Magistory Instant Video",
+  "description": "An AI-powered video editor that instantly generates video drafts from a simple text prompt. It uses Gemini to create scripts and find relevant media, presenting it in an intuitive editor similar to CapCut and Canva.",
+  "requestFramePermissions": []
+}

@@ -1,0 +1,366 @@
+
+
+
+
+
+import React, { useState, useEffect, useRef } from 'react';
+import type { Segment } from '../types';
+import LoadingSpinner from './LoadingSpinner';
+import { 
+    generateImageFromPrompt,
+    editImageFromPrompt,
+    generateVideoFromPrompt,
+    getVideosOperation,
+    generateSpeechFromText
+} from '../services/geminiService';
+import { imageUrlToBase64, playGeneratedAudio, decode } from '../utils/media';
+
+interface AIToolsModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  segment: Segment;
+  onUpdateMedia: (newUrl: string) => void;
+  onUpdateAudio: (newUrl: string) => void;
+}
+
+type Tab = 'generate-image' | 'edit-image' | 'generate-video' | 'tts';
+
+const AIToolsModal: React.FC<AIToolsModalProps> = ({ isOpen, onClose, segment, onUpdateMedia, onUpdateAudio }) => {
+  const [activeTab, setActiveTab] = useState<Tab>('generate-image');
+
+  if (!isOpen) return null;
+
+  return (
+    // FIX: The onClick handler for `onClose` was being passed the event object. Changed to an arrow function to call `onClose` without arguments.
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in" onClick={() => onClose()}>
+      <div className="bg-gray-800 rounded-lg shadow-2xl w-full max-w-5xl h-[90vh] flex flex-col p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-2xl font-bold text-purple-300">AI Media Tools</h2>
+           {/* FIX: The onClick handler for `onClose` was being passed the event object. Changed to an arrow function to call `onClose` without arguments. */}
+           <button onClick={() => onClose()} className="text-gray-400 hover:text-white text-3xl">&times;</button>
+        </div>
+        
+        <div className="border-b border-gray-700 mb-4">
+          <nav className="flex gap-4">
+            <TabButton name="Generate Image" tab="generate-image" activeTab={activeTab} setActiveTab={setActiveTab} />
+            <TabButton name="Edit Image" tab="edit-image" activeTab={activeTab} setActiveTab={setActiveTab} />
+            <TabButton name="Generate Video" tab="generate-video" activeTab={activeTab} setActiveTab={setActiveTab} />
+            <TabButton name="Text to Speech" tab="tts" activeTab={activeTab} setActiveTab={setActiveTab} />
+          </nav>
+        </div>
+
+        <div className="flex-grow overflow-y-auto">
+          {activeTab === 'generate-image' && <GenerateImageTab segment={segment} onUpdateMedia={onUpdateMedia} onClose={onClose} />}
+          {activeTab === 'edit-image' && <EditImageTab segment={segment} onUpdateMedia={onUpdateMedia} onClose={onClose} />}
+          {activeTab === 'generate-video' && <GenerateVideoTab segment={segment} onUpdateMedia={onUpdateMedia} onClose={onClose} />}
+          {activeTab === 'tts' && <TextToSpeechTab segment={segment} onUpdateAudio={onUpdateAudio} />}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
+const TabButton: React.FC<{name: string, tab: Tab, activeTab: Tab, setActiveTab: (tab: Tab) => void}> = ({ name, tab, activeTab, setActiveTab }) => (
+    <button
+      onClick={() => setActiveTab(tab)}
+      className={`px-4 py-2 font-semibold border-b-2 transition-colors ${activeTab === tab ? 'text-purple-400 border-purple-400' : 'text-gray-400 border-transparent hover:text-white hover:border-gray-500'}`}
+    >
+      {name}
+    </button>
+);
+
+// --- Generate Image Tab ---
+const GenerateImageTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string) => void; onClose: () => void; }> = ({ segment, onUpdateMedia, onClose }) => {
+    const [prompt, setPrompt] = useState(segment.search_keywords_for_media);
+    const [isLoading, setIsLoading] = useState(false);
+    const [result, setResult] = useState<string | null>(null);
+    const [error, setError] = useState('');
+
+    const handleGenerate = async () => {
+        if (!prompt) return;
+        setIsLoading(true);
+        setError('');
+        setResult(null);
+        try {
+            const imageUrl = await generateImageFromPrompt(prompt);
+            setResult(imageUrl);
+        } catch (err) {
+            setError('Failed to generate image. Please try again.');
+            console.error(err);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    
+    const handleUseImage = () => {
+        if (!result) return;
+        onUpdateMedia(result);
+        onClose();
+    }
+
+    return (
+        <div>
+            <p className="text-gray-300 mb-4">Create a new image from a text description. The result will be a 16:9 image.</p>
+            <div className="flex gap-2 mb-4">
+                <input type="text" value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="e.g., A futuristic city skyline at sunset" className="flex-grow p-3 bg-gray-700 border border-gray-600 rounded-md focus:ring-2 focus:ring-purple-500 outline-none" />
+                <button onClick={handleGenerate} disabled={isLoading || !prompt} className="px-6 py-2 bg-purple-600 text-white font-semibold rounded-md hover:bg-purple-700 disabled:bg-gray-600 flex items-center gap-2">
+                    {isLoading && <LoadingSpinner />} Generate
+                </button>
+            </div>
+             {error && <p className="text-red-400 text-center mb-2">{error}</p>}
+            <div className="w-full aspect-video bg-gray-900 rounded-md flex items-center justify-center">
+                {isLoading && <LoadingSpinner />}
+                {result && <img src={result} className="w-full h-full object-contain" />}
+            </div>
+            {result && (
+                 <button onClick={handleUseImage} className="mt-4 w-full px-6 py-3 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700">
+                    Use This Image
+                </button>
+            )}
+        </div>
+    );
+};
+
+// --- Edit Image Tab ---
+const EditImageTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string) => void; onClose: () => void; }> = ({ segment, onUpdateMedia, onClose }) => {
+    const [prompt, setPrompt] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [result, setResult] = useState<string | null>(null);
+    const [error, setError] = useState('');
+    const [originalImage, setOriginalImage] = useState(segment.mediaUrl);
+    
+    const handleEdit = async () => {
+        if (!prompt) return;
+        setIsLoading(true);
+        setError('');
+        setResult(null);
+        try {
+            const { base64, mimeType } = await imageUrlToBase64(originalImage);
+            const imageUrl = await editImageFromPrompt(base64, mimeType, prompt);
+            setResult(imageUrl);
+        } catch (err) {
+            setError('Failed to edit image. This might be a CORS issue with the source image. Please try again or use a different image.');
+            console.error(err);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleUseImage = () => {
+        if (!result) return;
+        onUpdateMedia(result);
+        onClose();
+    }
+
+    return (
+         <div>
+            <p className="text-gray-300 mb-4">Modify the current image using a text command.</p>
+            <div className="flex gap-2 mb-4">
+                <input type="text" value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="e.g., Add a retro filter, make it black and white" className="flex-grow p-3 bg-gray-700 border border-gray-600 rounded-md focus:ring-2 focus:ring-purple-500 outline-none" />
+                <button onClick={handleEdit} disabled={isLoading || !prompt} className="px-6 py-2 bg-purple-600 text-white font-semibold rounded-md hover:bg-purple-700 disabled:bg-gray-600 flex items-center gap-2">
+                    {isLoading && <LoadingSpinner />} Edit
+                </button>
+            </div>
+            {error && <p className="text-red-400 text-center mb-2">{error}</p>}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 <div className="w-full aspect-video bg-gray-900 rounded-md flex flex-col items-center justify-center">
+                    <p className="text-sm font-semibold text-gray-400 mb-1">Original</p>
+                    <img src={originalImage} className="w-full h-full object-contain" />
+                 </div>
+                 <div className="w-full aspect-video bg-gray-900 rounded-md flex flex-col items-center justify-center">
+                    <p className="text-sm font-semibold text-gray-400 mb-1">Result</p>
+                    <div className="w-full h-full flex items-center justify-center">
+                       {isLoading && <LoadingSpinner />}
+                       {result && <img src={result} className="w-full h-full object-contain" />}
+                    </div>
+                 </div>
+            </div>
+             {result && (
+                 <button onClick={handleUseImage} className="mt-4 w-full px-6 py-3 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700">
+                    Use This Edited Image
+                </button>
+            )}
+        </div>
+    );
+};
+
+// --- Generate Video Tab ---
+const videoGenMessages = [
+    "Warming up the AI video engine...",
+    "Scripting the first scene...",
+    "Casting the digital actors...",
+    "Setting up the virtual cameras...",
+    "Action! Filming the sequence...",
+    "Adding special effects...",
+    "Rendering the final cut...",
+    "This is taking longer than usual, but we're still working on it...",
+];
+
+const GenerateVideoTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string) => void; onClose: () => void; }> = ({ segment, onUpdateMedia, onClose }) => {
+    const [prompt, setPrompt] = useState(segment.narration_text);
+    const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
+    const [isLoading, setIsLoading] = useState(false);
+    const [result, setResult] = useState<string | null>(null);
+    const [error, setError] = useState('');
+    const [apiKeySelected, setApiKeySelected] = useState(false);
+    const [loadingMessage, setLoadingMessage] = useState(videoGenMessages[0]);
+    const pollingRef = useRef<number>();
+
+    useEffect(() => {
+        // Check for API key on mount
+        if (window.aistudio) {
+            window.aistudio.hasSelectedApiKey().then(setApiKeySelected);
+        }
+    }, []);
+
+    useEffect(() => {
+        // Cleanup polling on unmount
+        return () => {
+            if (pollingRef.current) clearInterval(pollingRef.current);
+        }
+    }, []);
+
+    const handleSelectKey = async () => {
+        // FIX: The `openSelectKey` function requires an object with a `billingLink` property as an argument.
+        await window.aistudio.openSelectKey({ billingLink: 'https://ai.google.dev/gemini-api/docs/billing' });
+        setApiKeySelected(true); // Assume success to avoid race condition
+    }
+
+    const handleGenerate = async () => {
+        if (!prompt) return;
+        setIsLoading(true);
+        setError('');
+        setResult(null);
+        let messageIndex = 0;
+        setLoadingMessage(videoGenMessages[messageIndex]);
+        const messageInterval = setInterval(() => {
+            messageIndex = (messageIndex + 1) % videoGenMessages.length;
+            setLoadingMessage(videoGenMessages[messageIndex]);
+        }, 8000);
+
+        try {
+            let operation = await generateVideoFromPrompt(prompt, aspectRatio);
+
+            const poll = async () => {
+                if (!isLoading) {
+                    if (pollingRef.current) clearInterval(pollingRef.current);
+                    return;
+                }
+                // FIX: Pass a request object to getVideosOperation to match the updated service function signature.
+                operation = await getVideosOperation({ operation });
+                if (operation.done) {
+                    setIsLoading(false);
+                    if (pollingRef.current) clearInterval(pollingRef.current);
+                    clearInterval(messageInterval);
+                    const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
+                    if (downloadLink) {
+                        // Append API key for access
+                        const videoUrl = `${downloadLink}&key=${process.env.API_KEY}`;
+                        setResult(videoUrl);
+                    } else {
+                        setError("Video generation finished, but no video URL was found.");
+                    }
+                }
+            };
+            
+            pollingRef.current = window.setInterval(poll, 10000);
+
+        } catch (err: any) {
+            setIsLoading(false);
+            clearInterval(messageInterval);
+            if (err.message.includes("Requested entity was not found")) {
+                setError('API Key is invalid. Please select a valid key.');
+                setApiKeySelected(false);
+            } else {
+                 setError('Failed to start video generation. Please try again.');
+            }
+            console.error(err);
+        }
+    };
+    
+    if (!apiKeySelected) {
+        return (
+             <div className="flex flex-col items-center justify-center h-full text-center">
+                <h3 className="text-xl font-semibold mb-2">API Key Required for Video Generation</h3>
+                <p className="text-gray-300 mb-4 max-w-md">The Veo video generation model requires you to select an API key associated with a project that has billing enabled.</p>
+                <button onClick={handleSelectKey} className="px-6 py-2 bg-purple-600 text-white font-semibold rounded-md hover:bg-purple-700">Select API Key</button>
+             </div>
+        )
+    }
+
+    return (
+        <div>
+            <p className="text-gray-300 mb-4">Generate a short video clip from a text prompt. This process can take several minutes.</p>
+             <div className="flex flex-col sm:flex-row gap-2 mb-4">
+                <input type="text" value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="e.g., A majestic eagle soaring over mountains" className="flex-grow p-3 bg-gray-700 border border-gray-600 rounded-md focus:ring-2 focus:ring-purple-500 outline-none" />
+                 <select value={aspectRatio} onChange={e => setAspectRatio(e.target.value as '16:9' | '9:16')} className="p-3 bg-gray-700 border border-gray-600 rounded-md outline-none">
+                    <option value="16:9">Landscape (16:9)</option>
+                    <option value="9:16">Portrait (9:16)</option>
+                </select>
+                <button onClick={handleGenerate} disabled={isLoading || !prompt} className="px-6 py-2 bg-purple-600 text-white font-semibold rounded-md hover:bg-purple-700 disabled:bg-gray-600 flex items-center gap-2">
+                    {isLoading && <LoadingSpinner />} Generate
+                </button>
+            </div>
+            {error && <p className="text-red-400 text-center mb-2">{error}</p>}
+            <div className="w-full aspect-video bg-gray-900 rounded-md flex items-center justify-center">
+                {isLoading && (
+                    <div className="text-center">
+                        <LoadingSpinner />
+                        <p className="mt-4 text-lg text-gray-300">{loadingMessage}</p>
+                    </div>
+                )}
+                {result && <video src={result} controls autoPlay className="w-full h-full object-contain" />}
+            </div>
+        </div>
+    );
+};
+
+
+// --- Text to Speech Tab ---
+const TextToSpeechTab: React.FC<{ segment: Segment; onUpdateAudio: (url: string) => void; }> = ({ segment, onUpdateAudio }) => {
+    const [isLoading, setIsLoading] = useState(false);
+    const [audioSrc, setAudioSrc] = useState<string | null>(null);
+    const [error, setError] = useState('');
+
+    const handleGenerate = async () => {
+        if (!segment.narration_text) return;
+        setIsLoading(true);
+        setError('');
+        setAudioSrc(null);
+        try {
+            const base64Audio = await generateSpeechFromText(segment.narration_text);
+            await playGeneratedAudio(base64Audio); // Autoplay for preview
+            // In a real app, you might upload this to a server and get a URL.
+            // For this demo, we can use a blob URL.
+            const audioBytes = decode(base64Audio);
+            const audioBlob = new Blob([audioBytes], { type: 'audio/pcm' });
+            const blobUrl = URL.createObjectURL(audioBlob);
+            setAudioSrc(blobUrl);
+            onUpdateAudio(blobUrl);
+
+        } catch (err) {
+            setError('Failed to generate speech. Please try again.');
+            console.error(err);
+        } finally {
+            setIsLoading(false);
+        }
+    }
+
+    return (
+         <div>
+            <p className="text-gray-300 mb-2">Generate a voiceover for the narration text.</p>
+            <div className="bg-gray-700 p-4 rounded-md mb-4">
+                <p className="italic text-gray-300">"{segment.narration_text}"</p>
+            </div>
+            <button onClick={handleGenerate} disabled={isLoading || !segment.narration_text} className="w-full px-6 py-3 bg-purple-600 text-white font-semibold rounded-md hover:bg-purple-700 disabled:bg-gray-600 flex items-center justify-center gap-2">
+                {isLoading && <LoadingSpinner />} Generate & Play Audio
+            </button>
+            {error && <p className="text-red-400 text-center mt-2">{error}</p>}
+            {audioSrc && <p className="text-green-400 text-center mt-2">Audio generated successfully!</p>}
+        </div>
+    );
+};
+
+
+export default AIToolsModal;
