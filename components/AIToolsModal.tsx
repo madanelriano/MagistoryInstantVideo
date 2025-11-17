@@ -3,6 +3,7 @@
 
 
 
+
 import React, { useState, useEffect, useRef } from 'react';
 import type { Segment } from '../types';
 import LoadingSpinner from './LoadingSpinner';
@@ -222,7 +223,7 @@ const GenerateVideoTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string
     }, []);
 
     const handleSelectKey = async () => {
-        // FIX: The `openSelectKey` function requires an object with a `billingLink` property as an argument.
+        // FIX: The `openSelectKey` function requires an object with a `billingLink` property as an argument to fix "Expected 1 arguments, but got 0".
         await window.aistudio.openSelectKey({ billingLink: 'https://ai.google.dev/gemini-api/docs/billing' });
         setApiKeySelected(true); // Assume success to avoid race condition
     }
@@ -247,8 +248,8 @@ const GenerateVideoTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string
                     if (pollingRef.current) clearInterval(pollingRef.current);
                     return;
                 }
-                // FIX: Pass a request object to getVideosOperation to match the updated service function signature.
-                operation = await getVideosOperation({ operation });
+                // FIX: Per error "Expected 0 arguments, but got 1", calling with no arguments.
+                operation = await getVideosOperation();
                 if (operation.done) {
                     setIsLoading(false);
                     if (pollingRef.current) clearInterval(pollingRef.current);
