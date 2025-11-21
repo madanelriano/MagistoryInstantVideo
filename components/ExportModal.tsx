@@ -1,9 +1,10 @@
-
 import React, { useState, useRef, useEffect } from 'react';
 import type { Segment, TextOverlayStyle, WordTiming, MediaClip } from '../types';
 import LoadingSpinner from './LoadingSpinner';
 import { DownloadIcon } from './icons';
-import { estimateWordTimings, generateSubtitleChunks } from '../utils/media';
+import { generateSubtitleChunks, audioBufferToWav, decodeAudioData } from '../utils/media';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -12,7 +13,7 @@ interface ExportModalProps {
   segments: Segment[];
 }
 
-type ExportStatus = 'idle' | 'rendering' | 'complete' | 'error';
+type ExportStatus = 'idle' | 'rendering_audio' | 'rendering_video' | 'encoding' | 'complete' | 'error';
 
 const RENDER_WIDTH = 1280;
 const RENDER_HEIGHT = 720;
@@ -25,7 +26,9 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
     const [statusText, setStatusText] = useState('');
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
     const [error, setError] = useState('');
-    const rendererRef = useRef<() => void>(null); // To hold the cancel function
+    
+    const ffmpegRef = useRef<FFmpeg>(new FFmpeg());
+    const isCancelledRef = useRef(false);
 
     useEffect(() => {
         // Reset state when modal is opened
@@ -34,13 +37,35 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
             setProgress(0);
             setVideoUrl(null);
             setError('');
+            isCancelledRef.current = false;
+            loadFFmpeg();
+        } else {
+             // Clean up logic if needed
+             isCancelledRef.current = true;
         }
     }, [isOpen]);
 
-    const handleClose = () => {
-        if (rendererRef.current) {
-            rendererRef.current(); // Cancel any ongoing render
+    const loadFFmpeg = async () => {
+        const ffmpeg = ffmpegRef.current;
+        if (!ffmpeg.loaded) {
+            try {
+                // Using jsdelivr which is often more reliable for these assets
+                const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm';
+                await ffmpeg.load({
+                    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+                    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+                });
+            } catch (e: any) {
+                console.error("FFmpeg load error:", e);
+                const msg = e.message || "Unknown error";
+                setError(`Failed to load video encoder engine: ${msg}. Please try again.`);
+                setStatus('error');
+            }
         }
+    };
+
+    const handleClose = () => {
+        isCancelledRef.current = true;
         onClose();
     }
     
@@ -83,7 +108,6 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
         if (!displayChunk) return;
 
         // Re-calculate lines for this chunk only to draw them
-        // Note: generateSubtitleChunks gives us words, but we need to lay them out in lines for canvas
         const words = displayChunk.timings;
         const lines: WordTiming[][] = [];
         let currentLine: WordTiming[] = [];
@@ -194,113 +218,122 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
     }
 
     const handleStartExport = async () => {
-        setStatus('rendering');
-        setProgress(0);
-        setError('');
-        setStatusText('Initializing renderer...');
+        if (status !== 'idle' && status !== 'error') return;
+        isCancelledRef.current = false;
+        const ffmpeg = ffmpegRef.current;
+        
+        if (!ffmpeg.loaded) {
+            await loadFFmpeg();
+            if (!ffmpeg.loaded) return; // Failed to load
+        }
 
-        let isCancelled = false;
-        rendererRef.current = () => { isCancelled = true; };
+        const totalDuration = segments.reduce((acc, s) => acc + s.duration, 0);
 
         try {
+            // --- PHASE 1: AUDIO RENDERING ---
+            setStatus('rendering_audio');
+            setStatusText('Mixing audio tracks...');
+            setProgress(10);
+
+            // Create Offline Context for fast rendering
+            const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+            const OfflineContextClass = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
+            const sampleRate = 44100;
+            // offline context length in frames
+            const length = Math.ceil(totalDuration * sampleRate);
+            const offlineCtx = new OfflineContextClass(1, length, sampleRate);
+            
+            let currentAudioTime = 0;
+            
+            // Load all audio files
+            for (const s of segments) {
+                if (s.audioUrl) {
+                    try {
+                        const response = await fetch(s.audioUrl);
+                        const arrayBuffer = await response.arrayBuffer();
+                        // We need a temp regular ctx to decode if offline ctx decoding is tricky in some browsers
+                        // But usually offlineCtx.decodeAudioData works fine.
+                        const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer);
+                        
+                        const source = offlineCtx.createBufferSource();
+                        source.buffer = audioBuffer;
+
+                        const gainNode = offlineCtx.createGain();
+                        gainNode.gain.value = s.audioVolume ?? 1.0;
+
+                        source.connect(gainNode);
+                        gainNode.connect(offlineCtx.destination);
+                        
+                        source.start(currentAudioTime);
+                    } catch (e) {
+                        console.warn("Failed to mix audio for segment", e);
+                    }
+                }
+                currentAudioTime += s.duration;
+            }
+
+            // Render Audio
+            const renderedBuffer = await offlineCtx.startRendering();
+            const wavBytes = audioBufferToWav(renderedBuffer);
+            await ffmpeg.writeFile('audio.wav', new Uint8Array(wavBytes));
+
+
+            // --- PHASE 2: VIDEO FRAME RENDERING ---
+            setStatus('rendering_video');
+            setStatusText('Loading visual assets...');
+            
             const canvas = document.createElement('canvas');
             canvas.width = RENDER_WIDTH;
             canvas.height = RENDER_HEIGHT;
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
             if (!ctx) throw new Error("Could not create canvas context.");
 
-            setStatusText('Loading media assets...');
-            // Flatten all clips from all segments to load them
+            // Load Images/Videos
             const allClips: { segmentIndex: number, clipIndex: number, clip: MediaClip }[] = [];
             segments.forEach((s, sIdx) => {
                 s.media.forEach((c, cIdx) => {
                     allClips.push({ segmentIndex: sIdx, clipIndex: cIdx, clip: c });
                 });
             });
-
-            // Map loaded assets by ID to easy retrieval
             const loadedAssets = new Map<string, HTMLImageElement | HTMLVideoElement>();
 
             await Promise.all(allClips.map(async ({ clip }) => {
-                if (loadedAssets.has(clip.id)) return; // Already loaded? (unlikely with unique IDs but good practice)
+                if (loadedAssets.has(clip.id)) return; 
+                
+                const isDataUrl = clip.url.startsWith('data:');
+                const cacheBuster = `?t=${Date.now()}-${Math.random()}`;
+                const safeUrl = isDataUrl 
+                    ? clip.url 
+                    : (clip.url.includes('?') ? `${clip.url}&cb=${Date.now()}` : `${clip.url}${cacheBuster}`);
+
                 try {
                     if (clip.type === 'image') {
                         const img = new Image();
-                        img.crossOrigin = "Anonymous";
-                        img.src = clip.url;
+                        if (!isDataUrl) img.crossOrigin = "Anonymous";
+                        img.src = safeUrl; 
                         await img.decode();
                         loadedAssets.set(clip.id, img);
                     } else {
                         const vid = document.createElement('video');
                         vid.crossOrigin = "Anonymous";
-                        vid.src = clip.url;
+                        vid.src = safeUrl;
                         vid.muted = true;
+                        vid.playsInline = true;
+                        // Need metadata for duration etc
                         await new Promise((res, rej) => {
-                            vid.oncanplaythrough = res;
+                            vid.onloadedmetadata = res;
                             vid.onerror = rej;
                         });
                         loadedAssets.set(clip.id, vid);
                     }
                 } catch (e) {
-                    console.error("Failed to load asset:", clip.url, e);
-                    // Continue even if one fails, maybe show placeholder or black
+                    console.warn("Failed to load asset:", clip.url);
                 }
             }));
-            
-            if (isCancelled) return;
 
-            const videoStream = canvas.captureStream(FRAME_RATE);
-            let combinedStream: MediaStream = videoStream;
-            const audioContext = new AudioContext();
-            let hasAudio = segments.some(s => s.audioUrl);
+            if (isCancelledRef.current) return;
 
-            if (hasAudio) {
-                setStatusText('Mixing audio tracks...');
-                const audioDestination = audioContext.createMediaStreamDestination();
-                
-                let currentAudioTime = audioContext.currentTime + 0.1; // Start slightly in future
-                
-                // We need to schedule each segment sequentially
-                for (const [index, s] of segments.entries()) {
-                    if (s.audioUrl) {
-                         const response = await fetch(s.audioUrl);
-                         const arrayBuffer = await response.arrayBuffer();
-                         const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                         
-                         const source = audioContext.createBufferSource();
-                         source.buffer = audioBuffer;
-
-                         const gainNode = audioContext.createGain();
-                         gainNode.gain.value = s.audioVolume ?? 1.0;
-
-                         source.connect(gainNode);
-                         gainNode.connect(audioDestination);
-                         
-                         source.start(currentAudioTime);
-                    }
-                    currentAudioTime += s.duration;
-                }
-
-                combinedStream = new MediaStream([videoStream.getVideoTracks()[0], audioDestination.stream.getAudioTracks()[0]]);
-            }
-
-            const recorder = new MediaRecorder(combinedStream, { mimeType: 'video/webm;codecs=vp9,opus' });
-            const chunks: Blob[] = [];
-            recorder.ondataavailable = e => chunks.push(e.data);
-            recorder.onstop = (e: Event) => {
-                const blob = new Blob(chunks, { type: 'video/webm' });
-                const url = URL.createObjectURL(blob);
-                setVideoUrl(url);
-                setStatus('complete');
-                audioContext.close();
-            };
-            recorder.start();
-
-            let totalTime = 0;
-            const totalDuration = segments.reduce((acc, s) => acc + s.duration, 0);
-            const frameDuration = 1 / FRAME_RATE;
-            
-            // Calculate start times for each segment
+            // Segment Time Map
             const segmentStartTimes = segments.reduce((acc, s, i) => {
                 const prevTime = i > 0 ? acc[i-1] : 0;
                 const duration = i > 0 ? segments[i-1].duration : 0;
@@ -308,29 +341,25 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                 return acc;
             }, [] as number[]);
 
-            const renderFrame = async () => {
-                if (isCancelled || totalTime >= totalDuration) {
-                    if (recorder.state === 'recording') recorder.stop();
-                    return;
-                }
-
-                // Find current segment based on time
+            const totalFrames = Math.ceil(totalDuration * FRAME_RATE);
+            
+            for (let i = 0; i < totalFrames; i++) {
+                if (isCancelledRef.current) return;
+                
+                const currentTime = i / FRAME_RATE;
+                
+                // Find Current Segment
                 let segmentIndex = segmentStartTimes.findIndex((startTime, idx) => {
                      const endTime = startTime + segments[idx].duration;
-                     return totalTime >= startTime && totalTime < endTime;
+                     return currentTime >= startTime && currentTime < endTime;
                 });
-                
-                // Handle edge case at very end or rounding errors
-                if (segmentIndex === -1) {
-                     if (totalTime >= totalDuration) segmentIndex = segments.length - 1;
-                     else segmentIndex = 0;
-                }
+                if (segmentIndex === -1) segmentIndex = segments.length - 1;
 
                 const currentSegment = segments[segmentIndex];
                 const segmentStartTime = segmentStartTimes[segmentIndex];
-                const timeInSegment = totalTime - segmentStartTime;
+                const timeInSegment = currentTime - segmentStartTime;
                 
-                // Determine which CLIP to show within this segment
+                // Find Current Clip
                 const clipDuration = currentSegment.duration / currentSegment.media.length;
                 const clipIndex = Math.min(
                     currentSegment.media.length - 1, 
@@ -339,24 +368,29 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                 const currentClip = currentSegment.media[clipIndex];
                 const currentAsset = loadedAssets.get(currentClip.id);
 
+                // Draw Frame
                 ctx.fillStyle = 'black';
                 ctx.fillRect(0, 0, RENDER_WIDTH, RENDER_HEIGHT);
 
                 const drawAsset = (asset: HTMLImageElement | HTMLVideoElement | undefined, time: number) => {
-                    if (!asset) return; // Should not happen if loaded correctly
-                    if (asset instanceof HTMLImageElement) {
-                        ctx.drawImage(asset, 0, 0, RENDER_WIDTH, RENDER_HEIGHT);
-                    } else if (asset instanceof HTMLVideoElement) {
-                        asset.currentTime = Math.min(asset.duration, time);
-                        ctx.drawImage(asset, 0, 0, RENDER_WIDTH, RENDER_HEIGHT);
-                    }
+                    if (!asset) return;
+                    try {
+                        if (asset instanceof HTMLImageElement) {
+                            ctx.drawImage(asset, 0, 0, RENDER_WIDTH, RENDER_HEIGHT);
+                        } else if (asset instanceof HTMLVideoElement) {
+                            // Seeking is slow, but necessary for frame accuracy in FFmpeg generation
+                            // To optimize, we only seek if time changed significantly or it's a new clip
+                            // However, for exact output, we set currentTime.
+                            asset.currentTime = Math.min(asset.duration || 0, time);
+                            ctx.drawImage(asset, 0, 0, RENDER_WIDTH, RENDER_HEIGHT);
+                        }
+                    } catch (err) { /* ignore draw error */ }
                 };
                 
-                // Time within this specific clip (if we had per-clip duration, we'd use that, here it's just mod)
                 const timeInClip = timeInSegment % clipDuration;
                 drawAsset(currentAsset, timeInClip);
                 
-                // Handle Transitions (only at end of segment, transition to next segment's first clip)
+                // Draw Transition
                 const timeToEndOfSegment = currentSegment.duration - timeInSegment;
                 if (currentSegment?.transition === 'fade' && timeToEndOfSegment < TRANSITION_DURATION_S && segmentIndex < segments.length - 1) {
                     const transitionProgress = 1 - (timeToEndOfSegment / TRANSITION_DURATION_S);
@@ -364,23 +398,67 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                     const nextAsset = loadedAssets.get(nextSegment.media[0].id);
                     
                     if (nextAsset) {
+                        ctx.save();
                         ctx.globalAlpha = transitionProgress;
-                        drawAsset(nextAsset, 0); // Start of next clip
-                        ctx.globalAlpha = 1.0;
+                        drawAsset(nextAsset, 0);
+                        ctx.restore();
                     }
                 }
                 
-                // Draw Subtitles
                 drawKaraokeText(ctx, currentSegment, timeInSegment);
-                
-                setProgress((totalTime / totalDuration) * 100);
-                setStatusText(`Rendering segment ${segmentIndex + 1} of ${segments.length}...`);
 
-                totalTime += frameDuration;
-                requestAnimationFrame(renderFrame);
-            };
+                // Convert Frame to Blob/Buffer
+                const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+                if (blob) {
+                    const buffer = await blob.arrayBuffer();
+                    // Write to FFmpeg virtual FS
+                    // name format: frame_001.jpg
+                    const frameName = `frame_${String(i).padStart(3, '0')}.jpg`;
+                    await ffmpeg.writeFile(frameName, new Uint8Array(buffer));
+                }
 
-            renderFrame();
+                // Update Progress
+                const percent = 20 + ((i / totalFrames) * 50); // 20% to 70%
+                setProgress(percent);
+                setStatusText(`Rendering frame ${i}/${totalFrames}...`);
+            }
+
+            // --- PHASE 3: ENCODING ---
+            setStatus('encoding');
+            setStatusText('Encoding final video (this might take a moment)...');
+            setProgress(75);
+            
+            // Run FFmpeg
+            // -r 30: Input framerate
+            // -i frame_%03d.jpg: Input images
+            // -i audio.wav: Input audio
+            // -c:v libx264: Video codec
+            // -pix_fmt yuv420p: Pixel format compatibility
+            // -shortest: Finish when shortest input stream ends
+            await ffmpeg.exec([
+                '-framerate', String(FRAME_RATE),
+                '-i', 'frame_%03d.jpg',
+                '-i', 'audio.wav',
+                '-c:v', 'libx264',
+                '-pix_fmt', 'yuv420p',
+                '-preset', 'ultrafast', // Faster encoding for web
+                'output.mp4'
+            ]);
+
+            setProgress(95);
+            const data = await ffmpeg.readFile('output.mp4');
+            const url = URL.createObjectURL(new Blob([data], { type: 'video/mp4' }));
+            
+            setVideoUrl(url);
+            setStatus('complete');
+            setProgress(100);
+
+            // Cleanup files to free memory
+            // Not strictly necessary as browser refreshes clear WASM mem, but good practice
+            // await ffmpeg.deleteFile('audio.wav');
+            // for (let i = 0; i < totalFrames; i++) {
+            //    await ffmpeg.deleteFile(`frame_${String(i).padStart(3, '0')}.jpg`);
+            // }
 
         } catch (err: any) {
             console.error("Export failed:", err);
@@ -395,40 +473,53 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in" onClick={handleClose}>
             <div className="bg-gray-800 rounded-lg shadow-2xl w-full max-w-2xl flex flex-col p-6" onClick={e => e.stopPropagation()}>
                 <div className="flex justify-between items-center mb-4">
-                    <h2 className="text-2xl font-bold text-purple-300">Export Video</h2>
+                    <h2 className="text-2xl font-bold text-purple-300">Export Video (HD)</h2>
                     <button onClick={handleClose} className="text-gray-400 hover:text-white text-3xl">&times;</button>
                 </div>
 
                 {status === 'idle' && (
                     <div className="text-center">
-                        <p className="text-gray-300 mb-4">Your video will be rendered as a 720p WebM file.</p>
-                        <p className="text-sm text-gray-400 mb-6">Rendering happens in your browser and may take a few minutes for longer videos.</p>
+                        <p className="text-gray-300 mb-4">Your video will be rendered as a high-quality MP4 file using FFmpeg technology.</p>
+                        <div className="bg-gray-700/50 p-4 rounded-md mb-6 text-left text-sm text-gray-400">
+                            <ul className="list-disc list-inside space-y-1">
+                                <li>Perfect audio/video synchronization</li>
+                                <li>Consistent 30 FPS frame rate</li>
+                                <li>Standard .mp4 format compatible with all devices</li>
+                                <li>Rendering happens locally in your browser</li>
+                            </ul>
+                        </div>
                         <button onClick={handleStartExport} className="w-full py-3 bg-purple-600 hover:bg-purple-700 rounded-md text-white font-semibold">
-                            Start Export
+                            Start High-Quality Export
                         </button>
                     </div>
                 )}
 
-                {status === 'rendering' && (
-                    <div className="text-center">
-                        <div className="flex justify-center mb-4"><LoadingSpinner /></div>
-                        <p className="text-lg font-semibold text-gray-200 mb-2">{statusText}</p>
-                        <div className="w-full bg-gray-700 rounded-full h-2.5">
-                            <div className="bg-purple-500 h-2.5 rounded-full" style={{ width: `${progress}%` }}></div>
+                {(status === 'rendering_audio' || status === 'rendering_video' || status === 'encoding') && (
+                    <div className="text-center py-4">
+                        <div className="flex justify-center mb-6"><LoadingSpinner /></div>
+                        <h3 className="text-lg font-semibold text-white mb-2">Processing Video</h3>
+                        <p className="text-sm text-gray-400 mb-4">{statusText}</p>
+                        
+                        <div className="w-full bg-gray-700 rounded-full h-3 mb-2 overflow-hidden">
+                            <div 
+                                className="bg-purple-500 h-full rounded-full transition-all duration-300 ease-out" 
+                                style={{ width: `${progress}%` }}
+                            ></div>
                         </div>
+                        <p className="text-xs text-gray-500">{Math.round(progress)}% Complete</p>
                     </div>
                 )}
                 
                 {status === 'complete' && videoUrl && (
                      <div className="text-center">
                         <p className="text-xl font-semibold text-green-400 mb-4">Render Complete!</p>
-                        <video src={videoUrl} controls className="w-full rounded-md mb-4"></video>
+                        <video src={videoUrl} controls className="w-full rounded-md mb-4 max-h-64 bg-black"></video>
                         <a 
                             href={videoUrl} 
-                            download={`${title.replace(/ /g, '_')}.webm`}
+                            download={`${title.replace(/ /g, '_')}.mp4`}
                             className="w-full py-3 bg-green-600 hover:bg-green-700 rounded-md text-white font-semibold flex items-center justify-center gap-2"
                         >
-                            <DownloadIcon /> Download Video
+                            <DownloadIcon /> Download MP4
                         </a>
                      </div>
                 )}
@@ -436,8 +527,8 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                 {status === 'error' && (
                     <div className="text-center">
                         <p className="text-xl font-semibold text-red-400 mb-4">Export Failed</p>
-                        <p className="text-gray-300 bg-gray-700 p-3 rounded-md">{error}</p>
-                         <button onClick={handleStartExport} className="mt-4 w-full py-3 bg-purple-600 hover:bg-purple-700 rounded-md text-white font-semibold">
+                        <p className="text-gray-300 bg-gray-700 p-3 rounded-md mb-4 text-sm text-left overflow-auto max-h-32">{error}</p>
+                         <button onClick={handleStartExport} className="w-full py-3 bg-purple-600 hover:bg-purple-700 rounded-md text-white font-semibold">
                             Try Again
                         </button>
                     </div>
