@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import type { Segment } from '../types';
+import type { Segment, WordTiming } from '../types';
 import LoadingSpinner from './LoadingSpinner';
 import { DownloadIcon } from './icons';
 import { generateSubtitleChunks, audioBufferToWav } from '../utils/media';
@@ -78,8 +78,6 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
 
     useEffect(() => {
         // Strict check for SharedArrayBuffer
-        // This is REQUIRED for the ffmpeg rendering engine to work properly.
-        // Most mobile browsers and non-secure contexts (http://localhost on external device) lack this.
         const hasSAB = typeof window.SharedArrayBuffer !== 'undefined';
         setIsCompatible(hasSAB);
 
@@ -99,8 +97,8 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
         const messages = [
             "Initializing video engine...",
             "Compiling WebAssembly...",
-            "Still working...",
-            "Optimizing..."
+            "Still working (this can take a minute on mobile)...",
+            "Optimizing engine..."
         ];
         let i = 0;
         setStatusText(messages[0]);
@@ -108,7 +106,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
         loadingIntervalRef.current = window.setInterval(() => {
             i = (i + 1) % messages.length;
             setStatusText(messages[i]);
-        }, 3000);
+        }, 4000);
     };
 
     const stopLoadingAnimation = () => {
@@ -155,12 +153,19 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
 
                 setProgress(25);
                 startLoadingAnimation();
-                await new Promise(r => setTimeout(r, 100));
+                await new Promise(r => setTimeout(r, 200));
 
-                await ffmpeg.load({
+                // Add timeout to prevent infinite stuck state
+                const loadPromise = ffmpeg.load({
                     coreURL: coreURL,
                     wasmURL: wasmURL,
                 });
+
+                const timeoutPromise = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error("Engine initialization timed out. Your device might be too slow or blocking the operation.")), 45000)
+                );
+
+                await Promise.race([loadPromise, timeoutPromise]);
                 
                 stopLoadingAnimation();
                 setStatusText('Engine ready.');

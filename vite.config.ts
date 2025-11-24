@@ -1,4 +1,3 @@
-
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
@@ -7,8 +6,11 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
   },
+  define: {
+    // Polyfill process.env for local development to prevent "process is not defined" error
+    'process.env': process.env
+  },
   server: {
-    // Basic server config to ensure host access if needed
-    host: true, 
+    host: true,
   }
 });
