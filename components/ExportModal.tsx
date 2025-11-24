@@ -70,7 +70,6 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
     
     // Refs to maintain state inside async callbacks
     const statusRef = useRef<ExportStatus>('idle');
-    // Using nullable ref and dynamic import to avoid optimization issues
     const ffmpegRef = useRef<FFmpeg | null>(null);
     const isCancelledRef = useRef(false);
     const loadingIntervalRef = useRef<number | null>(null);
@@ -135,34 +134,40 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
 
         if (!ffmpeg.loaded) {
             setStatus('loading_engine');
-            setStatusText('Downloading video engine components...');
             
             try {
-                // Attach progress listener only once
+                // Determine if we support SharedArrayBuffer (required for standard 0.12.x multi-thread)
+                // If not (e.g. headers missing, insecure context), use single-threaded fallback logic if possible
+                // Note: @ffmpeg/core 0.12.x is heavily dependent on SharedArrayBuffer.
+                // If missing, we might need to fallback or warn.
+                const hasSharedArrayBuffer = typeof window.SharedArrayBuffer !== 'undefined';
+                
+                if (!hasSharedArrayBuffer) {
+                    console.warn("SharedArrayBuffer not available. FFmpeg might fail or run slowly.");
+                    // We can attempt to proceed, but if it fails, we catch it below.
+                }
+
+                // Attach progress listener
                 ffmpeg.on('progress', ({ progress: p }) => {
-                    // FFmpeg reports 0-1. 
-                    // We map encoding phase (after rendering) to 90-100% of total progress bar
+                    // Map encoding phase (0-1) to 90-100%
                     if (statusRef.current === 'encoding') {
                          setProgress(90 + (p * 10));
                     }
                 });
 
-                ffmpeg.on('log', ({ message }) => {
-                    console.log('FFmpeg Log:', message);
-                });
-
-                // Use the Single-Threaded version for maximum compatibility (Termux/Android)
-                // Version 0.12.10 'core' is typically single threaded or compatible.
+                // Default baseURL for 0.12.10
                 const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm';
                 
-                // 1. Download JS (Approx 0-5% of total progress)
+                setStatusText('Downloading engine scripts...');
+                // 1. Download JS (0-5%)
                 const coreURL = await fetchWithProgress(
                     `${baseURL}/ffmpeg-core.js`,
                     'text/javascript',
                     (p) => setProgress(p * 0.05)
                 );
 
-                // 2. Download WASM (Approx 5-25% of total progress)
+                setStatusText('Downloading engine core (~25MB)...');
+                // 2. Download WASM (5-25%)
                 const wasmURL = await fetchWithProgress(
                     `${baseURL}/ffmpeg-core.wasm`, 
                     'application/wasm', 
@@ -173,13 +178,15 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                 setProgress(25);
                 startLoadingAnimation();
                 
-                // Crucial: Yield to main thread so UI updates before heavy WASM compilation
+                // Allow UI update
                 await new Promise(r => setTimeout(r, 100));
 
-                // Wrap load in a timeout race to detect "stuck" state
                 const loadPromise = ffmpeg.load({
                     coreURL: coreURL,
                     wasmURL: wasmURL,
+                    // If SharedArrayBuffer is missing, 0.12 might crash here.
+                    // Usually there is no easy single-thread fallback for 0.12 without a different binary.
+                    // But we proceed and catch the error.
                 });
                 
                 const timeoutPromise = new Promise((_, reject) => {
@@ -189,8 +196,6 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                 await Promise.race([loadPromise, timeoutPromise]);
                 
                 stopLoadingAnimation();
-                
-                // Loaded successfully
                 setProgress(28);
                 setStatusText('Engine ready.');
                 
@@ -198,14 +203,12 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                 stopLoadingAnimation();
                 console.error("FFmpeg load error:", e);
                 const msg = e.message || "Unknown error";
-                let friendlyMsg = `Failed to download or load the video engine. Error: ${msg}`;
+                let friendlyMsg = `Failed to initialize video engine. Error: ${msg}`;
                 
                 if (msg.includes("SharedArrayBuffer")) {
-                    friendlyMsg = "Browser feature missing (SharedArrayBuffer). Try using Chrome/Firefox on Desktop.";
+                    friendlyMsg = "Browser security check failed (SharedArrayBuffer missing). Please try using Chrome Desktop or check if the server sends COOP/COEP headers.";
                 } else if (msg.includes("timed out")) {
-                    friendlyMsg = "Initialization timed out. Your device might be too slow or the browser is throttling the process. Try closing other tabs.";
-                } else if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-                    friendlyMsg = "Network error: Failed to download the video engine (~25MB). Check connection.";
+                    friendlyMsg = "Initialization timed out. Your device might be slow. Try closing other tabs.";
                 }
                 
                 setError(friendlyMsg);
