@@ -6,10 +6,8 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
   },
-  define: {
-    // Polyfill process.env for local development to prevent "process is not defined" error
-    'process.env': process.env
-  },
+  // HAPUS BLOCK DEFINE YANG BERMASALAH DI SINI
+
   server: {
     host: true,
   }
