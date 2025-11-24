@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect } from 'react';
 import type { Segment, TextOverlayStyle, WordTiming, MediaClip } from '../types';
 import LoadingSpinner from './LoadingSpinner';
@@ -13,7 +14,7 @@ interface ExportModalProps {
   segments: Segment[];
 }
 
-type ExportStatus = 'idle' | 'rendering_audio' | 'rendering_video' | 'encoding' | 'complete' | 'error';
+type ExportStatus = 'idle' | 'loading_engine' | 'rendering_audio' | 'rendering_video' | 'encoding' | 'complete' | 'error';
 
 const RENDER_WIDTH = 1280;
 const RENDER_HEIGHT = 720;
@@ -37,7 +38,6 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
             setVideoUrl(null);
             setError('');
             isCancelledRef.current = false;
-            loadFFmpeg();
         } else {
              isCancelledRef.current = true;
         }
@@ -46,6 +46,8 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
     const loadFFmpeg = async () => {
         const ffmpeg = ffmpegRef.current;
         if (!ffmpeg.loaded) {
+            setStatus('loading_engine');
+            setStatusText('Downloading video engine (this happens once)...');
             try {
                 // Attach progress listener for encoding phase
                 ffmpeg.on('progress', ({ progress, time }) => {
@@ -55,7 +57,11 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                     if (p < 100) setProgress(p);
                 });
 
-                const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+                ffmpeg.on('log', ({ message }) => {
+                    console.log('FFmpeg:', message);
+                });
+
+                const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm';
                 await ffmpeg.load({
                     coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
                     wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
@@ -63,8 +69,15 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
             } catch (e: any) {
                 console.error("FFmpeg load error:", e);
                 const msg = e.message || "Unknown error";
-                setError(`Failed to load video encoder engine: ${msg}. Please try again.`);
+                let friendlyMsg = `Failed to load video encoder: ${msg}.`;
+                
+                if (msg.includes("SharedArrayBuffer")) {
+                    friendlyMsg += " This browser environment does not support secure memory sharing required by the engine. Please try using a modern desktop browser or a secure context (HTTPS).";
+                }
+                
+                setError(friendlyMsg);
                 setStatus('error');
+                throw e; 
             }
         }
     };
@@ -216,16 +229,18 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
     const handleStartExport = async () => {
         if (status !== 'idle' && status !== 'error') return;
         isCancelledRef.current = false;
-        const ffmpeg = ffmpegRef.current;
         
-        if (!ffmpeg.loaded) {
-            await loadFFmpeg();
-            if (!ffmpeg.loaded) return; 
-        }
-
-        const totalDuration = segments.reduce((acc, s) => acc + s.duration, 0);
-
         try {
+            await loadFFmpeg();
+            if (isCancelledRef.current) return;
+
+            const ffmpeg = ffmpegRef.current;
+            if (!ffmpeg.loaded) {
+                throw new Error("FFmpeg failed to load");
+            }
+
+            const totalDuration = segments.reduce((acc, s) => acc + s.duration, 0);
+
             setStatus('rendering_audio');
             setStatusText('Mixing audio tracks...');
             setProgress(5);
@@ -459,7 +474,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                     </div>
                 )}
 
-                {(status === 'rendering_audio' || status === 'rendering_video' || status === 'encoding') && (
+                {(status === 'loading_engine' || status === 'rendering_audio' || status === 'rendering_video' || status === 'encoding') && (
                     <div className="text-center py-4">
                         <div className="flex justify-center mb-6"><LoadingSpinner /></div>
                         <h3 className="text-lg font-semibold text-white mb-2">Processing Video</h3>
@@ -472,6 +487,9 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                             ></div>
                         </div>
                         <p className="text-xs text-gray-500">{Math.round(progress)}% Complete</p>
+                        {status === 'loading_engine' && (
+                            <p className="text-[10px] text-gray-600 mt-2">Initial download ~25MB. Please wait...</p>
+                        )}
                     </div>
                 )}
                 
