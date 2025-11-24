@@ -7,4 +7,8 @@ export default defineConfig({
   optimizeDeps: {
     exclude: ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
   },
+  server: {
+    // Basic server config to ensure host access if needed
+    host: true, 
+  }
 });

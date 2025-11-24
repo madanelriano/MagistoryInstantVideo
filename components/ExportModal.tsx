@@ -1,10 +1,10 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import type { Segment, MediaClip, WordTiming } from '../types';
+import type { Segment } from '../types';
 import LoadingSpinner from './LoadingSpinner';
 import { DownloadIcon } from './icons';
 import { generateSubtitleChunks, audioBufferToWav } from '../utils/media';
-import type { FFmpeg } from '@ffmpeg/ffmpeg'; // Type-only import
+import type { FFmpeg } from '@ffmpeg/ffmpeg'; 
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -18,7 +18,6 @@ type ExportStatus = 'idle' | 'loading_engine' | 'rendering_audio' | 'rendering_v
 const RENDER_WIDTH = 1280;
 const RENDER_HEIGHT = 720;
 const FRAME_RATE = 30;
-const TRANSITION_DURATION_S = 0.7;
 
 // Helper to fetch Blob with progress tracking
 const fetchWithProgress = async (url: string, mimeType: string, onProgress: (percent: number) => void): Promise<string> => {
@@ -68,19 +67,19 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
     const [error, setError] = useState('');
     const [isCompatible, setIsCompatible] = useState(true);
     
-    // Refs to maintain state inside async callbacks
     const statusRef = useRef<ExportStatus>('idle');
     const ffmpegRef = useRef<FFmpeg | null>(null);
     const isCancelledRef = useRef(false);
     const loadingIntervalRef = useRef<number | null>(null);
 
-    // Sync status state to ref
     useEffect(() => {
         statusRef.current = status;
     }, [status]);
 
     useEffect(() => {
-        // Check for SharedArrayBuffer support (Required for FFmpeg MT)
+        // Strict check for SharedArrayBuffer
+        // This is REQUIRED for the ffmpeg rendering engine to work properly.
+        // Most mobile browsers and non-secure contexts (http://localhost on external device) lack this.
         const hasSAB = typeof window.SharedArrayBuffer !== 'undefined';
         setIsCompatible(hasSAB);
 
@@ -99,15 +98,13 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
     const startLoadingAnimation = () => {
         const messages = [
             "Initializing video engine...",
-            "Compiling WebAssembly (this can take a minute)...",
-            "Still working on it, please wait...",
-            "Optimizing for your device...",
-            "Almost ready to render..."
+            "Compiling WebAssembly...",
+            "Still working...",
+            "Optimizing..."
         ];
         let i = 0;
         setStatusText(messages[0]);
         if (loadingIntervalRef.current) clearInterval(loadingIntervalRef.current);
-        
         loadingIntervalRef.current = window.setInterval(() => {
             i = (i + 1) % messages.length;
             setStatusText(messages[i]);
@@ -123,17 +120,15 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
 
     const loadFFmpeg = async () => {
         if (!isCompatible) {
-            throw new Error("Browser security mismatch. 'SharedArrayBuffer' is missing.");
+            throw new Error("SharedArrayBuffer is missing. Export not supported on this browser.");
         }
 
         if (!ffmpegRef.current) {
             try {
-                // Dynamic import to avoid build/optimizer errors
                 const { FFmpeg } = await import('@ffmpeg/ffmpeg');
                 ffmpegRef.current = new FFmpeg();
             } catch (e) {
-                console.error("Failed to import FFmpeg:", e);
-                throw new Error("Failed to load export engine. Try running 'npm install @ffmpeg/ffmpeg @ffmpeg/util' or check your connection.");
+                throw new Error("Failed to load FFmpeg module.");
             }
         }
 
@@ -153,52 +148,32 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                 const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/esm';
                 
                 setStatusText('Downloading engine scripts...');
-                const coreURL = await fetchWithProgress(
-                    `${baseURL}/ffmpeg-core.js`,
-                    'text/javascript',
-                    (p) => setProgress(p * 0.05)
-                );
+                const coreURL = await fetchWithProgress(`${baseURL}/ffmpeg-core.js`, 'text/javascript', (p) => setProgress(p * 0.05));
 
                 setStatusText('Downloading engine core (~25MB)...');
-                const wasmURL = await fetchWithProgress(
-                    `${baseURL}/ffmpeg-core.wasm`, 
-                    'application/wasm', 
-                    (p) => setProgress(5 + (p * 0.20)) 
-                );
+                const wasmURL = await fetchWithProgress(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm', (p) => setProgress(5 + (p * 0.20)));
 
                 setProgress(25);
                 startLoadingAnimation();
-                
-                // Allow UI update
                 await new Promise(r => setTimeout(r, 100));
 
-                const loadPromise = ffmpeg.load({
+                await ffmpeg.load({
                     coreURL: coreURL,
                     wasmURL: wasmURL,
                 });
                 
-                // Timeout after 90 seconds for slower devices
-                const timeoutPromise = new Promise((_, reject) => {
-                    setTimeout(() => reject(new Error("Engine initialization timed out. Your device might be too slow for this operation.")), 90000);
-                });
-
-                await Promise.race([loadPromise, timeoutPromise]);
-                
                 stopLoadingAnimation();
-                setProgress(28);
                 setStatusText('Engine ready.');
                 
             } catch (e: any) {
                 stopLoadingAnimation();
                 console.error("FFmpeg load error:", e);
-                const msg = e.message || "Unknown error";
+                // Clean up error message
+                const msg = e.message?.includes("SharedArrayBuffer") 
+                    ? "Browser missing security features required for export." 
+                    : e.message || "Failed to initialize engine.";
                 
-                let friendlyMsg = `Failed to initialize video engine. ${msg}`;
-                if (msg.includes("SharedArrayBuffer")) {
-                    friendlyMsg = "Your browser environment is missing SharedArrayBuffer. This is common on mobile or simple localhost servers. Please try using Chrome on Desktop or use the 'Generate Video' AI tool instead.";
-                }
-                
-                setError(friendlyMsg);
+                setError(msg);
                 setStatus('error');
                 throw e; 
             }
@@ -211,10 +186,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
         onClose();
     }
     
-    // ... [Karaoke drawing code remains same, omitted for brevity but assumed present] ...
     const drawKaraokeText = (ctx: CanvasRenderingContext2D, segment: Segment, currentTimeInSegment: number) => {
-         // Logic identical to previous version
-         // Re-implementing simplified version to ensure file integrity
          const style = segment.textOverlayStyle;
          if (!style || !segment.narration_text) return;
          const timings = segment.wordTimings;
@@ -266,7 +238,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
 
     const handleStartExport = async () => {
         if (!isCompatible) {
-            setError("Cannot export on this device/browser. The video engine requires a secure desktop environment (SharedArrayBuffer). Please use the 'AI Generate Video' (Veo) tool instead.");
+            setError("Cannot export on this device. Please use a Desktop browser (Chrome/Edge) or use the Cloud Video Generator.");
             setStatus('error');
             return;
         }
@@ -286,7 +258,6 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
             setStatusText('Mixing audio tracks...');
             setProgress(30);
 
-            // Audio mixing logic
             const OfflineContextClass = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
             const totalDuration = segments.reduce((acc, s) => acc + s.duration, 0);
             const offlineCtx = new OfflineContextClass(1, Math.ceil(totalDuration * 44100), 44100);
@@ -321,11 +292,6 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
             const ctx = canvas.getContext('2d', { willReadFrequently: true });
             if (!ctx) throw new Error("Canvas init failed");
 
-            // ... Asset Loading & Rendering Loop (Simplified for brevity, same logic as before) ...
-            // [Rendering loop would go here, same as previous file]
-            // We assume the heavy logic is unchanged, just wrapped in the environment checks.
-             
-            // -- RE-INSERTING RENDER LOGIC FOR COMPLETENESS --
             const loadedAssets = new Map<string, HTMLImageElement | HTMLVideoElement>();
             for (const s of segments) {
                 for (const c of s.media) {
@@ -361,10 +327,8 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                 const seg = segments[currentSegmentIndex];
                 const timeInSeg = currentTime - segmentTimeStart;
                 
-                // Draw Background
                 ctx.fillStyle = '#000'; ctx.fillRect(0,0,RENDER_WIDTH,RENDER_HEIGHT);
                 
-                // Draw Media
                 const clipDuration = seg.duration / seg.media.length;
                 const clipIdx = Math.min(seg.media.length-1, Math.floor(timeInSeg / clipDuration));
                 const asset = loadedAssets.get(seg.media[clipIdx].id);
@@ -373,7 +337,6 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                     ctx.drawImage(asset, 0,0, RENDER_WIDTH, RENDER_HEIGHT);
                 }
 
-                // Draw Text
                 drawKaraokeText(ctx, seg, timeInSeg);
 
                 const blob = await new Promise<Blob | null>(r => canvas.toBlob(r, 'image/jpeg', 0.8));
@@ -383,7 +346,6 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                 setStatusText(`Rendering frame ${i}/${totalFrames}`);
                 if (i%5===0) await new Promise(r => setTimeout(r, 0));
             }
-            // -- END RENDER LOGIC --
 
             setStatus('encoding');
             await ffmpeg.exec(['-framerate', String(FRAME_RATE), '-i', 'frame_%03d.jpg', '-i', 'audio.wav', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-preset', 'ultrafast', 'output.mp4']);
@@ -415,10 +377,13 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                     <div className="text-center">
                         {!isCompatible ? (
                             <div className="bg-yellow-900/30 border border-yellow-600/50 p-4 rounded-md mb-6">
-                                <p className="text-yellow-200 font-semibold mb-2">Browser Limitation Detected</p>
-                                <p className="text-sm text-yellow-100/80">
-                                    Your current browser environment (likely mobile or basic localhost) is missing <code>SharedArrayBuffer</code>. 
-                                    Realtime rendering requires a secure desktop environment (Chrome Desktop) or specific server headers.
+                                <p className="text-yellow-200 font-semibold mb-2">Device Compatibility Notice</p>
+                                <p className="text-sm text-yellow-100/80 mb-2">
+                                    Local video export requires a secure desktop environment (e.g., Chrome on PC). 
+                                    Your current device (Mobile/Termux) does not support the required <code>SharedArrayBuffer</code> feature.
+                                </p>
+                                <p className="text-sm text-white font-bold">
+                                    Recommended: Use "Generate Video" in the AI Tools menu for cloud rendering.
                                 </p>
                             </div>
                         ) : (
@@ -429,10 +394,10 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                             onClick={handleStartExport} 
                             disabled={!isCompatible}
                             className={`w-full py-3 rounded-md text-white font-semibold transition-colors
-                                ${!isCompatible ? 'bg-gray-600 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'}
+                                ${!isCompatible ? 'bg-gray-600 cursor-not-allowed opacity-50' : 'bg-purple-600 hover:bg-purple-700'}
                             `}
                         >
-                            {!isCompatible ? 'Export Unavailable on Mobile/WebView' : 'Start Export'}
+                            {!isCompatible ? 'Export Unavailable on this Device' : 'Start Export'}
                         </button>
                     </div>
                 )}
