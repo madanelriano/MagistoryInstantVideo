@@ -2,19 +2,20 @@ import React, { useState } from 'react';
 import { MagicWandIcon, LargePlayIcon } from './icons';
 
 interface PromptInputProps {
-  onGenerate: (prompt: string, duration: string) => void;
+  onGenerate: (prompt: string, duration: string, aspectRatio: 'landscape' | 'portrait') => void;
   onManualStart: () => void;
 }
 
 const PromptInput: React.FC<PromptInputProps> = ({ onGenerate, onManualStart }) => {
   const [prompt, setPrompt] = useState('');
   const [duration, setDuration] = useState('1 minute');
+  const [aspectRatio, setAspectRatio] = useState<'landscape' | 'portrait'>('landscape');
   const [mode, setMode] = useState<'ai' | 'manual'>('ai');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (prompt.trim()) {
-      onGenerate(prompt, duration);
+      onGenerate(prompt, duration, aspectRatio);
     }
   };
 
@@ -81,23 +82,38 @@ const PromptInput: React.FC<PromptInputProps> = ({ onGenerate, onManualStart }) 
       {mode === 'ai' && (
         <div className="bg-gray-800/60 p-6 rounded-xl border border-gray-700">
              <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-                <div className="flex flex-col sm:flex-row gap-2">
+                <div className="flex flex-col md:flex-row gap-2">
                     <input
-                    type="text"
-                    value={prompt}
-                    onChange={(e) => setPrompt((e.target as any).value)}
-                    placeholder="e.g., 'How to make a perfect omelette'"
-                    className="flex-grow p-4 bg-gray-900 border-2 border-gray-700 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:outline-none transition-all"
+                        type="text"
+                        value={prompt}
+                        onChange={(e) => setPrompt((e.target as any).value)}
+                        placeholder="e.g., 'How to make a perfect omelette'"
+                        className="flex-grow p-4 bg-gray-900 border-2 border-gray-700 rounded-md focus:ring-2 focus:ring-purple-500 focus:border-purple-500 focus:outline-none transition-all"
                     />
-                    <select 
-                        value={duration}
-                        onChange={(e) => setDuration((e.target as any).value)}
-                        className="p-4 bg-gray-900 border-2 border-gray-700 rounded-md focus:ring-2 focus:ring-purple-500 focus:outline-none w-full sm:w-40"
-                    >
-                        {durationOptions.map(opt => (
-                            <option key={opt} value={opt}>{opt}</option>
-                        ))}
-                    </select>
+                    <div className="flex gap-2 flex-shrink-0">
+                         {/* Aspect Ratio Selector */}
+                        <select 
+                            value={aspectRatio}
+                            onChange={(e) => setAspectRatio((e.target as any).value)}
+                            className="p-4 bg-gray-900 border-2 border-gray-700 rounded-md focus:ring-2 focus:ring-purple-500 focus:outline-none w-1/2 md:w-auto cursor-pointer"
+                            title="Select Video Orientation"
+                        >
+                            <option value="landscape">Landscape (16:9)</option>
+                            <option value="portrait">Portrait (9:16)</option>
+                        </select>
+
+                        {/* Duration Selector */}
+                        <select 
+                            value={duration}
+                            onChange={(e) => setDuration((e.target as any).value)}
+                            className="p-4 bg-gray-900 border-2 border-gray-700 rounded-md focus:ring-2 focus:ring-purple-500 focus:outline-none w-1/2 md:w-40 cursor-pointer"
+                            title="Select Duration"
+                        >
+                            {durationOptions.map(opt => (
+                                <option key={opt} value={opt}>{opt}</option>
+                            ))}
+                        </select>
+                    </div>
                 </div>
                 <button
                 type="submit"

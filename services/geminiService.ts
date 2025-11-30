@@ -1,8 +1,7 @@
 
-
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import type { VideoScript, Segment, TransitionEffect } from '../types';
-import { searchPixabayImages, searchPixabayVideos } from "./pixabayService";
+import type { VideoScript, Segment, TransitionEffect, AudioClip } from '../types';
+import { searchPixabayImages, searchPixabayVideos, searchPixabayAudio } from "./pixabayService";
 
 if (!process.env.API_KEY) {
     console.warn("API_KEY environment variable not found. Using a placeholder.");
@@ -10,7 +9,7 @@ if (!process.env.API_KEY) {
 
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-export async function generateVideoScript(topic: string, requestedDuration: string): Promise<VideoScript> {
+export async function generateVideoScript(topic: string, requestedDuration: string, aspectRatio: 'landscape' | 'portrait' = 'landscape'): Promise<VideoScript> {
   const ai = getAI();
   try {
     const response = await ai.models.generateContent({
@@ -24,7 +23,11 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
            - INVALID: "happiness" (too short), "business team meeting office" (too long), "a cat" (filler words).
            - VALID: "business meeting", "running dog", "storm clouds", "cooking steak", "office working".
         4. **No Generic Segments**: Every segment must have a specific visual focus matching the narration.
-        5. **Music Theme**: Suggest a "background_music_keywords" phrase (2-3 words) describing the mood/genre of music suitable for this video. Use standard music library terms (e.g., "Upbeat Corporate", "Cinematic Epic", "Lo-fi Chill", "Ambient Nature").
+        5. **Music Theme**: Suggest "background_music_keywords" (3-5 words) that describe the perfect background track. Include Genre, Mood, and Tempo. Use Pixabay-friendly terms.
+           - Examples: "Cinematic Ambient Piano", "Upbeat Corporate Pop", "Epic Orchestral Heroic", "Lo-fi Hip Hop Chill".
+        6. **Sound Effects**: For segments that depict specific actions or environments, provide "sfx_keywords".
+           - Examples: "ocean waves", "camera shutter", "city traffic", "keyboard typing", "whoosh".
+           - Leave empty if no specific sound effect is needed.
         
         The goal is a fast-paced, visually accurate video where the image changes exactly when the subject in the narration changes.`,
         config: {
@@ -38,7 +41,7 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
                     },
                     background_music_keywords: {
                         type: Type.STRING,
-                        description: "Keywords to search for suitable background music (Mood + Genre)."
+                        description: "Keywords to search for background music (Genre + Mood + Instruments)."
                     },
                     segments: {
                         type: Type.ARRAY,
@@ -57,6 +60,10 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
                                 duration: {
                                     type: Type.INTEGER,
                                     description: "Duration of this segment in seconds (keep it short, 2-5s)."
+                                },
+                                sfx_keywords: {
+                                    type: Type.STRING,
+                                    description: "Keywords for a relevant sound effect (e.g. 'whoosh', 'applause'). Optional."
                                 }
                             },
                             required: ["narration_text", "search_keywords_for_media", "duration"]
@@ -68,7 +75,11 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
         }
     });
 
-    const parsedResponse: { title: string; background_music_keywords: string; segments: Omit<Segment, 'id' | 'media' | 'mediaType' | 'mediaUrl'>[] } = JSON.parse(response.text);
+    const parsedResponse: { 
+        title: string; 
+        background_music_keywords: string; 
+        segments: (Omit<Segment, 'id' | 'media' | 'mediaType' | 'mediaUrl'> & { sfx_keywords?: string })[] 
+    } = JSON.parse(response.text);
 
     // Fetch initial media for all segments from Pixabay
     const segmentsWithMediaPromises = parsedResponse.segments.map(async (segment, index) => {
@@ -81,7 +92,8 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
         
         try {
             // Try fetching video first to prioritize dynamic content
-            const videoResults = await searchPixabayVideos(keyword);
+            // Pass the aspect ratio here
+            const videoResults = await searchPixabayVideos(keyword, aspectRatio);
             if (videoResults && videoResults.length > 0) {
                 const video = videoResults[0];
                 // Try to find HD quality, fallback to first available
@@ -94,7 +106,7 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
 
             // If no video found, fallback to photo
             if (mediaType !== 'video') {
-                const photoResults = await searchPixabayImages(keyword);
+                const photoResults = await searchPixabayImages(keyword, aspectRatio);
                 if (photoResults && photoResults.length > 0) {
                     mediaUrl = photoResults[0].src.large2x;
                     mediaType = 'image';
@@ -132,10 +144,76 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
 
     const segmentsWithMedia = await Promise.all(segmentsWithMediaPromises);
 
+    // --- Auto-Generate Global Audio Tracks (Music & SFX) ---
+    const audioTracks: AudioClip[] = [];
+    
+    // 1. Background Music
+    try {
+        if (parsedResponse.background_music_keywords) {
+            const musicResults = await searchPixabayAudio(parsedResponse.background_music_keywords, 'music');
+            if (musicResults && musicResults.length > 0) {
+                const bestTrack = musicResults[0];
+                // Calculate total duration to set music duration initially
+                const totalVideoDuration = segmentsWithMedia.reduce((acc, seg) => acc + seg.duration, 0);
+                
+                audioTracks.push({
+                    id: `audio-bg-${Date.now()}`,
+                    url: bestTrack.url,
+                    name: bestTrack.name || "Background Music",
+                    type: 'music',
+                    startTime: 0,
+                    duration: totalVideoDuration, // Match video length
+                    volume: 0.2 // Low volume for background
+                });
+            }
+        }
+    } catch (e) {
+        console.warn("Failed to auto-generate background music:", e);
+    }
+
+    // 2. Sound Effects
+    try {
+        let currentTimelineOffset = 0;
+        // Fetch SFX for segments sequentially to avoid rate limiting or just map concurrently
+        // We iterate through original parsed segments which match segmentsWithMedia indices
+        const sfxPromises = parsedResponse.segments.map(async (seg, index) => {
+            const start = currentTimelineOffset;
+            currentTimelineOffset += seg.duration;
+
+            if (seg.sfx_keywords) {
+                 try {
+                     const sfxResults = await searchPixabayAudio(seg.sfx_keywords, 'sfx');
+                     if (sfxResults && sfxResults.length > 0) {
+                         const bestSfx = sfxResults[0];
+                         return {
+                             id: `audio-sfx-${Date.now()}-${index}`,
+                             url: bestSfx.url,
+                             name: bestSfx.name || seg.sfx_keywords || "SFX",
+                             type: 'sfx' as const,
+                             startTime: start,
+                             duration: bestSfx.duration > 5 ? 5 : bestSfx.duration, // Cap max SFX duration
+                             volume: 0.8
+                         };
+                     }
+                 } catch (err) {
+                     console.warn(`Failed to fetch SFX for segment ${index}:`, err);
+                 }
+            }
+            return null;
+        });
+
+        const sfxTracks = (await Promise.all(sfxPromises)).filter(t => t !== null) as AudioClip[];
+        audioTracks.push(...sfxTracks);
+
+    } catch (e) {
+        console.warn("Failed to auto-generate sound effects:", e);
+    }
+
     const processedScript: VideoScript = {
         title: parsedResponse.title,
         backgroundMusicKeywords: parsedResponse.background_music_keywords,
         segments: segmentsWithMedia,
+        audioTracks: audioTracks
     };
 
     return processedScript;

@@ -38,8 +38,19 @@ export interface Segment {
   wordTimings?: WordTiming[];
 }
 
+export interface AudioClip {
+    id: string;
+    url: string;
+    name: string;
+    type: 'music' | 'sfx';
+    startTime: number; // Global start time in seconds
+    duration: number;
+    volume: number;
+}
+
 export interface VideoScript {
   title: string;
   backgroundMusicKeywords?: string;
   segments: Segment[];
+  audioTracks?: AudioClip[]; // New global audio tracks
 }

@@ -14,9 +14,11 @@ interface AudioModalProps {
   segment: Segment;
   onUpdateAudio: (newUrl: string | undefined, duration?: number) => void;
   initialSearchTerm?: string;
+  targetTrackType?: 'music' | 'sfx' | null;
+  onAddAudioTrack?: (url: string, type: 'music' | 'sfx', duration: number, name: string) => void;
 }
 
-const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpdateAudio, initialSearchTerm }) => {
+const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpdateAudio, initialSearchTerm, targetTrackType, onAddAudioTrack }) => {
   const [activeTab, setActiveTab] = useState<'library' | 'ai'>('library');
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiError, setAiError] = useState('');
@@ -26,6 +28,9 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
   const [musicResults, setMusicResults] = useState<any[]>([]);
   const [isLoadingMusic, setIsLoadingMusic] = useState(false);
   const [musicError, setMusicError] = useState('');
+  
+  // Target Selection State (if triggered generically)
+  const [selectedTarget, setSelectedTarget] = useState<'segment' | 'music' | 'sfx'>(targetTrackType || 'segment');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -35,6 +40,12 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
         handleSearchMusic(searchQuery);
     }
   }, [isOpen, activeTab]);
+
+  useEffect(() => {
+      if (isOpen && targetTrackType) {
+          setSelectedTarget(targetTrackType);
+      }
+  }, [isOpen, targetTrackType]);
 
   const handleSearchMusic = async (q: string) => {
       if (!q.trim()) return;
@@ -56,25 +67,53 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
       handleSearchMusic(searchQuery);
   }
 
+  const handleMagicAutoSelect = async () => {
+      setIsLoadingMusic(true);
+      setMusicError('');
+      // Use initial AI keywords or fallback to 'Cinematic'
+      const query = initialSearchTerm || 'Cinematic';
+      setSearchQuery(query);
+      
+      try {
+          const results = await searchPixabayAudio(query);
+          if (results.length > 0) {
+             const bestMatch = results[0];
+             await processAudioSelection(bestMatch.url, bestMatch.name);
+             return; // Close happens in processAudioSelection
+          } else {
+             setMusicError("No auto-match found. Please search manually.");
+             setMusicResults([]);
+          }
+      } catch (e) {
+          setMusicError("Auto-select failed.");
+      } finally {
+          setIsLoadingMusic(false);
+      }
+  }
+
+  const processAudioSelection = async (url: string, name: string) => {
+      const duration = await getAudioDuration(url);
+      
+      if (selectedTarget === 'segment') {
+          onUpdateAudio(url, duration);
+      } else if (onAddAudioTrack) {
+          onAddAudioTrack(url, selectedTarget, duration, name);
+      }
+      
+      onClose();
+  }
+
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = (event.target as any).files?.[0];
     if (file) {
       const audioUrl = URL.createObjectURL(file);
-      const duration = await getAudioDuration(audioUrl);
-      onUpdateAudio(audioUrl, duration);
-      onClose();
+      await processAudioSelection(audioUrl, file.name);
     }
   };
 
   const handleUploadClick = () => {
     (fileInputRef.current as any)?.click();
   };
-
-  const handleSelectStock = async (url: string) => {
-    const duration = await getAudioDuration(url);
-    onUpdateAudio(url, duration);
-    onClose();
-  }
 
   const handleRemoveAudio = () => {
     onUpdateAudio(undefined);
@@ -89,6 +128,7 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
     try {
         const base64Audio = await generateSpeechFromText(segment.narration_text);
         const wavBlobUrl = createWavBlobUrl(base64Audio);
+        // AI Voice is strictly for segment narration usually
         const duration = await getAudioDuration(wavBlobUrl);
         onUpdateAudio(wavBlobUrl, duration);
         onClose();
@@ -126,77 +166,68 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
             </button>
         </div>
         
-        <div className="flex-grow overflow-y-auto custom-scrollbar">
-            {/* Common: Current Audio Status */}
-            <div className="mb-6">
-                <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Current Audio</h3>
-                <div className="bg-gray-700/50 p-3 rounded-md flex items-center justify-between border border-gray-600">
-                    {segment.audioUrl ? (
-                        <>
-                            <div className="flex items-center gap-3 overflow-hidden">
-                                <div className="p-2 bg-purple-900/50 rounded-full text-purple-300">
-                                    <MusicIcon className="w-5 h-5" />
-                                </div>
-                                <div className="flex flex-col min-w-0">
-                                    <span className="text-gray-200 text-sm font-medium truncate">
-                                        {segment.audioUrl.startsWith('blob:') ? 'Generated / Uploaded Audio' : segment.audioUrl.split('/').pop()?.replace('.mp3', '')}
-                                    </span>
-                                    <span className="text-xs text-gray-500">{segment.duration}s</span>
-                                </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                                <audio src={segment.audioUrl} controls className="h-8 w-24 md:w-40 opacity-70 hover:opacity-100 transition-opacity" />
-                                <button onClick={handleRemoveAudio} className="text-xs bg-red-900/30 text-red-400 px-2 py-1 rounded hover:bg-red-900/50 border border-red-900/50">Remove</button>
-                            </div>
-                        </>
-                    ) : (
-                        <span className="text-gray-500 italic text-sm">No audio attached to this segment.</span>
-                    )}
+        {/* Target Selection - Only show if not forced or if generic add */}
+        {activeTab === 'library' && (
+             <div className="mb-4 bg-gray-900/50 p-3 rounded-md border border-gray-700 flex items-center gap-4">
+                <span className="text-sm font-bold text-gray-400">ADD TO:</span>
+                <div className="flex gap-2">
+                    <button 
+                        onClick={() => setSelectedTarget('segment')} 
+                        className={`px-3 py-1 text-xs rounded-full border ${selectedTarget === 'segment' ? 'bg-purple-600 border-purple-400 text-white' : 'bg-gray-800 border-gray-600 text-gray-400'}`}
+                    >
+                        Current Segment
+                    </button>
+                    <button 
+                        onClick={() => setSelectedTarget('music')} 
+                        className={`px-3 py-1 text-xs rounded-full border ${selectedTarget === 'music' ? 'bg-blue-600 border-blue-400 text-white' : 'bg-gray-800 border-gray-600 text-gray-400'}`}
+                    >
+                        Music Track
+                    </button>
+                    <button 
+                         onClick={() => setSelectedTarget('sfx')} 
+                         className={`px-3 py-1 text-xs rounded-full border ${selectedTarget === 'sfx' ? 'bg-orange-600 border-orange-400 text-white' : 'bg-gray-800 border-gray-600 text-gray-400'}`}
+                    >
+                        SFX Track
+                    </button>
                 </div>
             </div>
+        )}
 
+        <div className="flex-grow overflow-y-auto custom-scrollbar">
             {activeTab === 'library' && (
                 <div className="space-y-6 animate-fade-in">
-                    {/* Upload Section */}
-                    <div>
-                        <h3 className="text-lg font-semibold text-gray-200 mb-3">Upload Audio</h3>
-                        <input
-                            type="file"
-                            ref={fileInputRef}
-                            onChange={handleFileChange}
-                            accept="audio/*"
-                            className="hidden"
-                        />
-                        <button 
-                            onClick={handleUploadClick} 
-                            className="w-full py-4 border-2 border-dashed border-gray-600 hover:border-purple-500 bg-gray-700/30 hover:bg-gray-700/50 rounded-lg text-gray-300 hover:text-purple-300 transition-all flex flex-col items-center gap-2"
-                        >
-                            <ExportIcon className="w-6 h-6" />
-                            <span className="font-semibold">Click to Upload from Device</span>
-                            <span className="text-xs text-gray-500">Supports MP3, WAV, AAC</span>
-                        </button>
-                    </div>
-                    
                     {/* Search Section */}
                     <div>
-                        <h3 className="text-lg font-semibold text-gray-200 mb-3">Stock Music (Pixabay)</h3>
+                        <h3 className="text-lg font-semibold text-gray-200 mb-3">Stock Audio (Pixabay)</h3>
                         
-                        <form onSubmit={handleSearchSubmit} className="flex gap-2 mb-4">
-                            <input 
-                                type="text" 
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery((e.target as any).value)}
-                                placeholder="Search music (e.g., 'Cinematic', 'Upbeat')"
-                                className="flex-grow p-2 bg-gray-900 border border-gray-600 rounded-md focus:ring-2 focus:ring-purple-500 text-white"
-                            />
-                            <button 
-                                type="submit" 
+                        <div className="flex gap-2 mb-4">
+                            <form onSubmit={handleSearchSubmit} className="flex-grow flex gap-2">
+                                <input 
+                                    type="text" 
+                                    value={searchQuery}
+                                    onChange={(e) => setSearchQuery((e.target as any).value)}
+                                    placeholder="Search music (e.g., 'Cinematic', 'Upbeat')"
+                                    className="flex-grow p-2 bg-gray-900 border border-gray-600 rounded-md focus:ring-2 focus:ring-purple-500 text-white"
+                                />
+                                <button 
+                                    type="submit" 
+                                    disabled={isLoadingMusic}
+                                    className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 font-semibold"
+                                >
+                                    {isLoadingMusic ? '...' : 'Search'}
+                                </button>
+                            </form>
+                            
+                            <button
+                                onClick={handleMagicAutoSelect}
                                 disabled={isLoadingMusic}
-                                className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 font-semibold"
+                                className="px-3 py-2 bg-gradient-to-r from-pink-600 to-purple-600 text-white rounded-md hover:opacity-90 font-semibold flex items-center gap-1 shadow-lg border border-white/20"
+                                title="Auto-Select Best Match"
                             >
-                                {isLoadingMusic ? '...' : 'Search'}
+                                <MagicWandIcon className="w-4 h-4" />
+                                <span className="hidden sm:inline">Magic Match</span>
                             </button>
-                        </form>
+                        </div>
 
                         {musicError && <p className="text-red-400 text-sm mb-2">{musicError}</p>}
                         
@@ -219,8 +250,8 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
                                         </div>
                                         <div className="flex items-center gap-2 flex-shrink-0">
                                              <audio src={track.url} controls className="h-6 w-24 opacity-50 hover:opacity-100" />
-                                             <button onClick={() => handleSelectStock(track.url)} className="px-4 py-1.5 text-xs font-bold bg-gray-500 hover:bg-purple-600 rounded-full text-white transition-colors">
-                                                Use
+                                             <button onClick={() => processAudioSelection(track.url, track.name)} className="px-4 py-1.5 text-xs font-bold bg-gray-500 hover:bg-purple-600 rounded-full text-white transition-colors">
+                                                Add
                                             </button>
                                         </div>
                                     </div>
@@ -232,6 +263,26 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
                                 )}
                             </div>
                         )}
+                    </div>
+
+                    {/* Upload Section */}
+                    <div>
+                        <h3 className="text-lg font-semibold text-gray-200 mb-3">Upload Custom Audio</h3>
+                        <input
+                            type="file"
+                            ref={fileInputRef}
+                            onChange={handleFileChange}
+                            accept="audio/*"
+                            className="hidden"
+                        />
+                        <button 
+                            onClick={handleUploadClick} 
+                            className="w-full py-4 border-2 border-dashed border-gray-600 hover:border-purple-500 bg-gray-700/30 hover:bg-gray-700/50 rounded-lg text-gray-300 hover:text-purple-300 transition-all flex flex-col items-center gap-2"
+                        >
+                            <ExportIcon className="w-6 h-6" />
+                            <span className="font-semibold">Click to Upload from Device</span>
+                            <span className="text-xs text-gray-500">Supports MP3, WAV, AAC</span>
+                        </button>
                     </div>
                 </div>
             )}
@@ -247,6 +298,12 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
                             </div>
                         </div>
                     </div>
+                    
+                    {selectedTarget !== 'segment' && (
+                         <div className="bg-yellow-900/20 border border-yellow-600/30 p-2 rounded text-xs text-yellow-200 mb-2">
+                             Note: AI Voiceover is best used with the "Current Segment" target to match visuals.
+                         </div>
+                    )}
 
                     <div className="space-y-2">
                         <label className="text-sm font-semibold text-gray-400 uppercase">Narration Text</label>

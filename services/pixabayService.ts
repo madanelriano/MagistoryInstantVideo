@@ -1,5 +1,4 @@
 
-
 const PIXABAY_API_KEY = '53479357-80b3feb16fd61b8af448448fc';
 const PIXABAY_API_BASE = 'https://pixabay.com/api/';
 
@@ -86,8 +85,16 @@ export async function searchPixabayVideos(query: string, orientation: 'landscape
     }));
 }
 
-export async function searchPixabayAudio(query: string): Promise<any[]> {
-    const response = await fetch(`https://pixabay.com/api/audio/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(query)}&per_page=20`);
+export async function searchPixabayAudio(query: string, type: 'music' | 'sfx' = 'music'): Promise<any[]> {
+    // Determine track type parameter for Pixabay (audio_type usually filters music vs effects if supported, 
+    // but Pixabay's main audio endpoint mixes them. We can try adding a keyword or checking API docs).
+    // Note: Official Pixabay API often separates music and sound effects via endpoint or param.
+    // We'll assume 'audio_type' parameter 'music' or 'sound_effect' based on common API patterns for Pixabay.
+    const audioTypeParam = type === 'sfx' ? 'sound_effect' : 'music';
+    
+    // Sometimes simple 'q' with keyword works best if param isn't strictly enforced.
+    // We add audio_type just in case.
+    const response = await fetch(`https://pixabay.com/api/audio/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(query)}&audio_type=${audioTypeParam}&per_page=20`);
     
     if (!response.ok) {
         throw new Error(`Pixabay Audio API request failed: ${response.statusText}`);
@@ -97,7 +104,7 @@ export async function searchPixabayAudio(query: string): Promise<any[]> {
 
     return (data.hits || []).map((hit: any) => ({
         id: hit.id,
-        name: hit.name || "Unknown Track",
+        name: hit.name || (type === 'sfx' ? "Sound Effect" : "Unknown Track"),
         url: hit.url,
         duration: hit.duration,
         tags: hit.tags,

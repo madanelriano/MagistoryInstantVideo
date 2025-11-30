@@ -1,7 +1,7 @@
 
 
 import React, { useState, useCallback, useEffect } from 'react';
-import type { VideoScript, Segment, TransitionEffect, TextOverlayStyle, WordTiming, MediaClip } from '../types';
+import type { VideoScript, Segment, TransitionEffect, TextOverlayStyle, WordTiming, MediaClip, AudioClip } from '../types';
 import PreviewWindow from './PreviewWindow';
 import Timeline from './Timeline';
 import Toolbar from './Toolbar';
@@ -21,30 +21,42 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   
   // History State Management
   const [history, setHistory] = useState<{
-      past: Segment[][];
-      present: Segment[];
-      future: Segment[][];
+      past: { segments: Segment[], audioTracks: AudioClip[] }[];
+      present: { segments: Segment[], audioTracks: AudioClip[] };
+      future: { segments: Segment[], audioTracks: AudioClip[] }[];
   }>({
       past: [],
-      present: initialScript.segments,
+      present: { 
+          segments: initialScript.segments, 
+          audioTracks: initialScript.audioTracks || [] 
+      },
       future: []
   });
 
-  const segments = history.present;
+  const segments = history.present.segments;
+  const audioTracks = history.present.audioTracks;
+
+  const updateHistory = useCallback((newSegments: Segment[], newAudioTracks: AudioClip[]) => {
+      setHistory(curr => ({
+          past: [...curr.past, curr.present],
+          present: { segments: newSegments, audioTracks: newAudioTracks },
+          future: []
+      }));
+  }, []);
 
   const updateSegments = useCallback((newSegmentsOrUpdater: Segment[] | ((prev: Segment[]) => Segment[])) => {
-      setHistory(curr => {
-          const newSegments = typeof newSegmentsOrUpdater === 'function' 
-              ? newSegmentsOrUpdater(curr.present) 
-              : newSegmentsOrUpdater;
-          
-          return {
-              past: [...curr.past, curr.present],
-              present: newSegments,
-              future: []
-          };
-      });
-  }, []);
+      const newSegments = typeof newSegmentsOrUpdater === 'function' 
+          ? newSegmentsOrUpdater(history.present.segments) 
+          : newSegmentsOrUpdater;
+      updateHistory(newSegments, history.present.audioTracks);
+  }, [history.present, updateHistory]);
+  
+  const updateAudioTracks = useCallback((newTracksOrUpdater: AudioClip[] | ((prev: AudioClip[]) => AudioClip[])) => {
+      const newTracks = typeof newTracksOrUpdater === 'function'
+          ? newTracksOrUpdater(history.present.audioTracks)
+          : newTracksOrUpdater;
+      updateHistory(history.present.segments, newTracks);
+  }, [history.present, updateHistory]);
 
   const handleUndo = useCallback(() => {
       setHistory(curr => {
@@ -84,6 +96,8 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   const [activeClipIdForTools, setActiveClipIdForTools] = useState<string | null>(null);
 
   const [isAudioModalOpen, setIsAudioModalOpen] = useState(false);
+  const [audioModalTargetTrack, setAudioModalTargetTrack] = useState<'music' | 'sfx' | null>(null);
+  
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [timelineZoom, setTimelineZoom] = useState(1);
 
@@ -162,6 +176,9 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
         let nextId = null;
         if (index > 0) nextId = newSegments[index - 1].id;
         else if (newSegments.length > 0) nextId = newSegments[0].id;
+        
+        // Defer state update to avoid render loop issues
+        setTimeout(() => setActiveSegmentId(nextId), 0);
         
         return newSegments;
     });
@@ -297,6 +314,28 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
     });
   }, [updateSegments]);
 
+  // --- AUDIO TRACK HANDLERS ---
+  const handleAddAudioTrack = useCallback((url: string, type: 'music' | 'sfx', duration: number, name: string) => {
+      const newTrack: AudioClip = {
+          id: `audio-${Date.now()}`,
+          url,
+          name,
+          type,
+          startTime: 0, // Start at beginning by default, drag to move
+          duration: duration || 10,
+          volume: 0.8
+      };
+      updateAudioTracks(prev => [...prev, newTrack]);
+  }, [updateAudioTracks]);
+
+  const handleUpdateAudioTrack = useCallback((trackId: string, updates: Partial<AudioClip>) => {
+      updateAudioTracks(prev => prev.map(t => t.id === trackId ? { ...t, ...updates } : t));
+  }, [updateAudioTracks]);
+
+  const handleDeleteAudioTrack = useCallback((trackId: string) => {
+      updateAudioTracks(prev => prev.filter(t => t.id !== trackId));
+  }, [updateAudioTracks]);
+
 
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-[calc(100vh-120px)] animate-fade-in">
@@ -305,7 +344,10 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
             setActiveClipIdForTools(activeSegment?.media[0]?.id || null);
             setIsAIToolsOpen(true); 
           }} 
-          onOpenAudioModal={() => setIsAudioModalOpen(true)}
+          onOpenAudioModal={() => {
+              setAudioModalTargetTrack(null); // Default to segment attachment
+              setIsAudioModalOpen(true);
+          }}
           onOpenExportModal={() => setIsExportOpen(true)}
           canUndo={history.past.length > 0}
           canRedo={history.future.length > 0}
@@ -372,6 +414,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                 </div>
                 <Timeline 
                     segments={segments}
+                    audioTracks={audioTracks}
                     onReorder={updateSegments}
                     activeSegmentId={activeSegmentId}
                     setActiveSegmentId={setActiveSegmentId}
@@ -380,6 +423,12 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                     timelineZoom={timelineZoom}
                     onNudgeSegment={handleNudgeSegment}
                     onAddSegment={handleAddSegment}
+                    onUpdateAudioTrack={handleUpdateAudioTrack}
+                    onDeleteAudioTrack={handleDeleteAudioTrack}
+                    onAddAudioTrack={(type) => {
+                        setAudioModalTargetTrack(type);
+                        setIsAudioModalOpen(true);
+                    }}
                 />
             </div>
         </div>
@@ -419,7 +468,9 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                 isOpen={isAudioModalOpen}
                 onClose={() => setIsAudioModalOpen(false)}
                 segment={activeSegment}
+                targetTrackType={audioModalTargetTrack}
                 onUpdateAudio={(newUrl, duration) => handleUpdateSegmentAudio(activeSegment.id, newUrl, duration)}
+                onAddAudioTrack={handleAddAudioTrack}
                 initialSearchTerm={initialScript.backgroundMusicKeywords}
             />
         )}
