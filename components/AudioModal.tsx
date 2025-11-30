@@ -1,9 +1,11 @@
 
-import React, { useRef, useState } from 'react';
+
+import React, { useRef, useState, useEffect } from 'react';
 import type { Segment } from '../types';
 import { MusicIcon, MagicWandIcon, ExportIcon } from './icons';
 import { getAudioDuration, createWavBlobUrl } from '../utils/media';
 import { generateSpeechFromText } from '../services/geminiService';
+import { searchPixabayAudio } from '../services/pixabayService';
 import LoadingSpinner from './LoadingSpinner';
 
 interface AudioModalProps {
@@ -11,21 +13,48 @@ interface AudioModalProps {
   onClose: () => void;
   segment: Segment;
   onUpdateAudio: (newUrl: string | undefined, duration?: number) => void;
+  initialSearchTerm?: string;
 }
 
-const stockMusic = [
-    { name: 'Uplifting Corporate', url: 'https://storage.googleapis.com/magistory-public/music/uplifting-corporate.mp3' },
-    { name: 'Cinematic Chill', url: 'https://storage.googleapis.com/magistory-public/music/cinematic-chill.mp3' },
-    { name: 'Acoustic Folk', url: 'https://storage.googleapis.com/magistory-public/music/acoustic-folk.mp3' },
-    { name: 'Ambient Background', url: 'https://storage.googleapis.com/magistory-public/music/ambient-background.mp3' },
-];
-
-const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpdateAudio }) => {
+const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpdateAudio, initialSearchTerm }) => {
   const [activeTab, setActiveTab] = useState<'library' | 'ai'>('library');
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiError, setAiError] = useState('');
   
+  // Library Search State
+  const [searchQuery, setSearchQuery] = useState(initialSearchTerm || 'ambient');
+  const [musicResults, setMusicResults] = useState<any[]>([]);
+  const [isLoadingMusic, setIsLoadingMusic] = useState(false);
+  const [musicError, setMusicError] = useState('');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Perform initial search if we have a term and no results yet
+  useEffect(() => {
+    if (isOpen && activeTab === 'library' && musicResults.length === 0) {
+        handleSearchMusic(searchQuery);
+    }
+  }, [isOpen, activeTab]);
+
+  const handleSearchMusic = async (q: string) => {
+      if (!q.trim()) return;
+      setIsLoadingMusic(true);
+      setMusicError('');
+      try {
+          const results = await searchPixabayAudio(q);
+          setMusicResults(results);
+      } catch (e: any) {
+          console.error("Music search failed", e);
+          setMusicError("Failed to fetch music from Pixabay.");
+      } finally {
+          setIsLoadingMusic(false);
+      }
+  }
+
+  const handleSearchSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      handleSearchMusic(searchQuery);
+  }
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = (event.target as any).files?.[0];
@@ -62,8 +91,6 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
         const wavBlobUrl = createWavBlobUrl(base64Audio);
         const duration = await getAudioDuration(wavBlobUrl);
         onUpdateAudio(wavBlobUrl, duration);
-        // Don't close immediately so user can see success or play it? 
-        // Or close for "Instant Video" feel. Let's close for consistency with other actions.
         onClose();
     } catch (err) {
         setAiError('Failed to generate speech. Please try again.');
@@ -77,7 +104,7 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in" onClick={onClose}>
-      <div className="bg-gray-800 rounded-lg shadow-2xl w-full max-w-2xl h-[80vh] flex flex-col p-6" onClick={e => e.stopPropagation()}>
+      <div className="bg-gray-800 rounded-lg shadow-2xl w-full max-w-3xl h-[85vh] flex flex-col p-6" onClick={e => e.stopPropagation()}>
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-2xl font-bold text-purple-300">Audio Manager</h2>
            <button onClick={onClose} className="text-gray-400 hover:text-white text-3xl">&times;</button>
@@ -89,7 +116,7 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
                 onClick={() => setActiveTab('library')}
                 className={`pb-2 px-1 font-semibold transition-colors border-b-2 ${activeTab === 'library' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-white'}`}
             >
-                Upload & Stock
+                Search & Upload
             </button>
             <button 
                 onClick={() => setActiveTab('ai')}
@@ -150,27 +177,61 @@ const AudioModal: React.FC<AudioModalProps> = ({ isOpen, onClose, segment, onUpd
                         </button>
                     </div>
                     
-                    {/* Stock Section */}
+                    {/* Search Section */}
                     <div>
-                        <h3 className="text-lg font-semibold text-gray-200 mb-3">Stock Music Library</h3>
-                        <div className="space-y-2">
-                            {stockMusic.map(track => (
-                                <div key={track.name} className="bg-gray-700 p-3 rounded-md flex items-center justify-between hover:bg-gray-600 transition-colors group">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-8 h-8 bg-gray-600 rounded-full flex items-center justify-center text-gray-400 group-hover:bg-purple-600 group-hover:text-white transition-colors">
-                                            <MusicIcon className="w-4 h-4" />
+                        <h3 className="text-lg font-semibold text-gray-200 mb-3">Stock Music (Pixabay)</h3>
+                        
+                        <form onSubmit={handleSearchSubmit} className="flex gap-2 mb-4">
+                            <input 
+                                type="text" 
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery((e.target as any).value)}
+                                placeholder="Search music (e.g., 'Cinematic', 'Upbeat')"
+                                className="flex-grow p-2 bg-gray-900 border border-gray-600 rounded-md focus:ring-2 focus:ring-purple-500 text-white"
+                            />
+                            <button 
+                                type="submit" 
+                                disabled={isLoadingMusic}
+                                className="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 font-semibold"
+                            >
+                                {isLoadingMusic ? '...' : 'Search'}
+                            </button>
+                        </form>
+
+                        {musicError && <p className="text-red-400 text-sm mb-2">{musicError}</p>}
+                        
+                        {isLoadingMusic ? (
+                            <div className="flex justify-center py-8">
+                                <LoadingSpinner />
+                            </div>
+                        ) : (
+                            <div className="space-y-2 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
+                                {musicResults.map(track => (
+                                    <div key={track.id} className="bg-gray-700 p-3 rounded-md flex items-center justify-between hover:bg-gray-600 transition-colors group">
+                                        <div className="flex items-center gap-3 overflow-hidden">
+                                            <div className="w-8 h-8 bg-gray-600 rounded-full flex items-center justify-center text-gray-400 group-hover:bg-purple-600 group-hover:text-white transition-colors flex-shrink-0">
+                                                <MusicIcon className="w-4 h-4" />
+                                            </div>
+                                            <div className="min-w-0">
+                                                <div className="text-gray-200 font-medium truncate">{track.name}</div>
+                                                <div className="text-xs text-gray-400">{track.tags}</div>
+                                            </div>
                                         </div>
-                                        <span className="text-gray-200 font-medium">{track.name}</span>
+                                        <div className="flex items-center gap-2 flex-shrink-0">
+                                             <audio src={track.url} controls className="h-6 w-24 opacity-50 hover:opacity-100" />
+                                             <button onClick={() => handleSelectStock(track.url)} className="px-4 py-1.5 text-xs font-bold bg-gray-500 hover:bg-purple-600 rounded-full text-white transition-colors">
+                                                Use
+                                            </button>
+                                        </div>
                                     </div>
-                                    <div className="flex items-center gap-2">
-                                         <audio src={track.url} controls className="h-6 w-24 opacity-50 hover:opacity-100" />
-                                         <button onClick={() => handleSelectStock(track.url)} className="px-4 py-1.5 text-xs font-bold bg-gray-500 hover:bg-purple-600 rounded-full text-white transition-colors">
-                                            Use
-                                        </button>
+                                ))}
+                                {musicResults.length === 0 && !isLoadingMusic && (
+                                    <div className="text-center text-gray-500 py-4">
+                                        No music found for "{searchQuery}". Try a different term.
                                     </div>
-                                </div>
-                            ))}
-                        </div>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

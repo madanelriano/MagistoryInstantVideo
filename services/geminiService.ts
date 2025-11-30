@@ -1,7 +1,8 @@
 
+
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import type { VideoScript, Segment, TransitionEffect } from '../types';
-import { searchPexelsPhotos, searchPexelsVideos } from "./pexelsService";
+import { searchPixabayImages, searchPixabayVideos } from "./pixabayService";
 
 if (!process.env.API_KEY) {
     console.warn("API_KEY environment variable not found. Using a placeholder.");
@@ -23,6 +24,7 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
            - INVALID: "happiness" (too short), "business team meeting office" (too long), "a cat" (filler words).
            - VALID: "business meeting", "running dog", "storm clouds", "cooking steak", "office working".
         4. **No Generic Segments**: Every segment must have a specific visual focus matching the narration.
+        5. **Music Theme**: Suggest a "background_music_keywords" phrase (2-3 words) describing the mood/genre of music suitable for this video. Use standard music library terms (e.g., "Upbeat Corporate", "Cinematic Epic", "Lo-fi Chill", "Ambient Nature").
         
         The goal is a fast-paced, visually accurate video where the image changes exactly when the subject in the narration changes.`,
         config: {
@@ -33,6 +35,10 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
                     title: { 
                         type: Type.STRING,
                         description: "A catchy title for the video."
+                    },
+                    background_music_keywords: {
+                        type: Type.STRING,
+                        description: "Keywords to search for suitable background music (Mood + Genre)."
                     },
                     segments: {
                         type: Type.ARRAY,
@@ -57,14 +63,14 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
                         }
                     }
                 },
-                required: ["title", "segments"]
+                required: ["title", "segments", "background_music_keywords"]
             }
         }
     });
 
-    const parsedResponse: { title: string; segments: Omit<Segment, 'id' | 'media' | 'mediaType' | 'mediaUrl'>[] } = JSON.parse(response.text);
+    const parsedResponse: { title: string; background_music_keywords: string; segments: Omit<Segment, 'id' | 'media' | 'mediaType' | 'mediaUrl'>[] } = JSON.parse(response.text);
 
-    // Fetch initial media for all segments from Pexels
+    // Fetch initial media for all segments from Pixabay
     const segmentsWithMediaPromises = parsedResponse.segments.map(async (segment, index) => {
         // Use the full descriptive phrase for better search results
         const keyword = segment.search_keywords_for_media.trim();
@@ -75,7 +81,7 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
         
         try {
             // Try fetching video first to prioritize dynamic content
-            const videoResults = await searchPexelsVideos(keyword);
+            const videoResults = await searchPixabayVideos(keyword);
             if (videoResults && videoResults.length > 0) {
                 const video = videoResults[0];
                 // Try to find HD quality, fallback to first available
@@ -88,14 +94,14 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
 
             // If no video found, fallback to photo
             if (mediaType !== 'video') {
-                const photoResults = await searchPexelsPhotos(keyword);
+                const photoResults = await searchPixabayImages(keyword);
                 if (photoResults && photoResults.length > 0) {
                     mediaUrl = photoResults[0].src.large2x;
                     mediaType = 'image';
                 }
             }
         } catch (e) {
-            console.warn("Failed to fetch initial media from Pexels, using placeholder.", e)
+            console.warn("Failed to fetch initial media from Pixabay, using placeholder.", e)
         }
         
         const transitions: TransitionEffect[] = ['fade', 'slide', 'zoom'];
@@ -127,7 +133,8 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
     const segmentsWithMedia = await Promise.all(segmentsWithMediaPromises);
 
     const processedScript: VideoScript = {
-        ...parsedResponse,
+        title: parsedResponse.title,
+        backgroundMusicKeywords: parsedResponse.background_music_keywords,
         segments: segmentsWithMedia,
     };
 
@@ -145,7 +152,7 @@ export async function suggestMediaKeywords(narrationText: string, videoContext?:
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `Based on the following narration text for a video segment, suggest 5 to 7 visually descriptive search phrases for stock footage (Pexels). 
+      contents: `Based on the following narration text for a video segment, suggest 5 to 7 visually descriptive search phrases for stock footage (Pixabay). 
       ${contextPrompt}
       
       Rules:

@@ -1,4 +1,5 @@
 
+
 import React, { useState, useCallback, useEffect } from 'react';
 import type { VideoScript, Segment, TransitionEffect, TextOverlayStyle, WordTiming, MediaClip } from '../types';
 import PreviewWindow from './PreviewWindow';
@@ -419,6 +420,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                 onClose={() => setIsAudioModalOpen(false)}
                 segment={activeSegment}
                 onUpdateAudio={(newUrl, duration) => handleUpdateSegmentAudio(activeSegment.id, newUrl, duration)}
+                initialSearchTerm={initialScript.backgroundMusicKeywords}
             />
         )}
         <VideoPreviewModal 

@@ -1,4 +1,5 @@
 
+
 export type TransitionEffect = 'fade' | 'slide' | 'zoom';
 export type TextAnimation = 'none' | 'scale' | 'slide-up' | 'highlight';
 
@@ -39,5 +40,6 @@ export interface Segment {
 
 export interface VideoScript {
   title: string;
+  backgroundMusicKeywords?: string;
   segments: Segment[];
 }

@@ -1,7 +1,8 @@
 
+
 import React, { useState, useEffect, useRef } from 'react';
 import { suggestMediaKeywords } from '../services/geminiService';
-import { searchPexelsPhotos, searchPexelsVideos } from '../services/pexelsService';
+import { searchPixabayImages, searchPixabayVideos } from '../services/pixabayService';
 import LoadingSpinner from './LoadingSpinner';
 import { PlayIcon, ExportIcon, MediaIcon, MagicWandIcon } from './icons';
 
@@ -89,8 +90,8 @@ const MediaSearchModal: React.FC<MediaSearchModalProps> = ({ isOpen, onClose, on
         
         if (searchType === 'all') {
             const [photos, videos] = await Promise.all([
-                searchPexelsPhotos(activeQuery, orientation),
-                searchPexelsVideos(activeQuery, orientation)
+                searchPixabayImages(activeQuery, orientation),
+                searchPixabayVideos(activeQuery, orientation)
             ]);
             
             // Interleave results to show a mix
@@ -100,10 +101,10 @@ const MediaSearchModal: React.FC<MediaSearchModalProps> = ({ isOpen, onClose, on
                 if (videos[i]) data.push({ ...videos[i], _type: 'video' });
             }
         } else if (searchType === 'photos') {
-            const photos = await searchPexelsPhotos(activeQuery, orientation);
+            const photos = await searchPixabayImages(activeQuery, orientation);
             data = photos.map(p => ({ ...p, _type: 'photo' }));
         } else if (searchType === 'videos') {
-            const videos = await searchPexelsVideos(activeQuery, orientation);
+            const videos = await searchPixabayVideos(activeQuery, orientation);
             data = videos.map(v => ({ ...v, _type: 'video' }));
         }
         
@@ -112,7 +113,7 @@ const MediaSearchModal: React.FC<MediaSearchModalProps> = ({ isOpen, onClose, on
         }
     } catch (err: any) {
         if (requestId === activeRequestRef.current) {
-            setError(err.message || "Failed to fetch media from Pexels. Check your API key and network connection.");
+            setError(err.message || "Failed to fetch media from Pixabay. Check your API key and network connection.");
             setResults([]);
         }
     } finally {
@@ -212,7 +213,7 @@ const MediaSearchModal: React.FC<MediaSearchModalProps> = ({ isOpen, onClose, on
                        <div className="p-4 bg-gray-600 rounded-full mb-4 group-hover:bg-blue-500">
                           <MediaIcon className="w-10 h-10 text-white" />
                       </div>
-                      <h3 className="text-xl font-bold text-white">Pexels Library</h3>
+                      <h3 className="text-xl font-bold text-white">Pixabay Library</h3>
                       <p className="text-sm text-gray-400 mt-2 group-hover:text-blue-100">Search stock media</p>
                   </button>
               </div>
@@ -279,7 +280,7 @@ const MediaSearchModal: React.FC<MediaSearchModalProps> = ({ isOpen, onClose, on
             </div>
             {searchType !== 'upload' && (
                 <p className="text-xs text-gray-500">
-                    Media provided by <a href="https://www.pexels.com" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-300">Pexels</a>
+                    Media provided by <a href="https://pixabay.com" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-300">Pixabay</a>
                 </p>
             )}
             <button onClick={onClose} className="text-gray-400 hover:text-white text-3xl ml-4">&times;</button>
@@ -392,7 +393,7 @@ const MediaSearchModal: React.FC<MediaSearchModalProps> = ({ isOpen, onClose, on
             isLoading ? (
                 <div className="flex flex-col items-center justify-center h-full gap-3">
                     <LoadingSpinner />
-                    <p className="text-gray-400 text-sm animate-pulse">Searching Pexels library...</p>
+                    <p className="text-gray-400 text-sm animate-pulse">Searching Pixabay library...</p>
                 </div>
             ) : (
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 pb-4">
