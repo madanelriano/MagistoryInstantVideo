@@ -3,10 +3,6 @@ import cors from 'cors';
 import { renderVideo } from './renderer.js';
 import path from 'path';
 import fs from 'fs';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 // Use PORT env variable provided by the hosting platform (Railway/Render)
@@ -20,7 +16,8 @@ app.use(cors({
 }));
 
 // Ensure temp dir exists in the runtime environment
-const TEMP_DIR = path.join(__dirname, '../temp');
+// Using process.cwd() is safer in Docker/Node environments than __dirname for this purpose
+const TEMP_DIR = path.join(process.cwd(), 'temp');
 if (!fs.existsSync(TEMP_DIR)) {
     fs.mkdirSync(TEMP_DIR, { recursive: true });
 }

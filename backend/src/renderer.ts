@@ -4,14 +4,9 @@ import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import { Buffer } from 'buffer';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// In Docker, relative paths depend on where 'dist' is.
-// Since index.ts creates ../temp relative to dist/src/, we match that here.
-const TEMP_DIR = path.join(__dirname, '../temp');
+// Using process.cwd() ensures we look for temp folder relative to where the app runs (root of container)
+const TEMP_DIR = path.join(process.cwd(), 'temp');
 
 interface RenderJob {
     title: string;
@@ -38,8 +33,9 @@ async function saveAsset(url: string, jobId: string, type: 'image' | 'video' | '
         });
         const writer = fs.createWriteStream(filePath);
         response.data.pipe(writer);
-        await new Promise((resolve, reject) => {
-            writer.on('finish', resolve);
+        await new Promise<void>((resolve, reject) => {
+            // Fix TS error: explicit void return for resolve
+            writer.on('finish', () => resolve());
             writer.on('error', reject);
         });
     }
