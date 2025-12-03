@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import { renderVideo } from './renderer';
@@ -86,6 +87,13 @@ app.get('/download/:jobId', (req, res) => {
     if (!job || job.status !== 'completed' || !job.path) {
         return res.status(404).json({ error: 'File not ready or not found' });
     }
+
+    if (!fs.existsSync(job.path)) {
+         return res.status(404).json({ error: 'File deleted from server' });
+    }
+    
+    // Explicitly set video header
+    res.setHeader('Content-Type', 'video/mp4');
     
     res.download(job.path, `video_export.mp4`, (err) => {
         if (err) console.error("Download error:", err);
