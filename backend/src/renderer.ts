@@ -7,7 +7,7 @@ import axios from 'axios';
 import { Buffer } from 'buffer';
 
 const TEMP_DIR = path.join((process as any).cwd(), 'temp');
-// Path standar font di image Debian/Ubuntu docker slim setelah install fonts-dejavu
+// Path font standar di Debian/Ubuntu (Docker Node Slim)
 const FONT_PATH_DEJAVU = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
 
 interface RenderJob {
@@ -43,6 +43,68 @@ async function saveAsset(url: string, jobId: string, type: 'image' | 'video' | '
     return filePath;
 }
 
+// Generate Advanced Substation Alpha (.ass) subtitle file for perfect sync
+function createASSFile(filePath: string, text: string, timings: any[], duration: number) {
+    // Escape header values safely
+    // ASS Header
+    let content = `[Script Info]
+ScriptType: v4.00+
+PlayResX: 1280
+PlayResY: 720
+WrapStyle: 1
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,DejaVu Sans,42,&H00FFFFFF,&H000000FF,&H00000000,&H60000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,50,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+    // Time formatter: Seconds -> H:MM:SS.cs
+    const fmtTime = (seconds: number) => {
+        const date = new Date(seconds * 1000);
+        const iso = date.toISOString().substr(11, 11); // 00:00:00.00
+        return iso.slice(0, -1); // 0:00:00.00
+    };
+
+    if (!timings || timings.length === 0) {
+        // Fallback: one full line
+        const end = fmtTime(duration);
+        content += `Dialogue: 0,0:00:00.00,${end},Default,,0,0,0,,${text}\n`;
+        fs.writeFileSync(filePath, content);
+        return;
+    }
+
+    // Chunk timings into lines (approx 50 chars max per line)
+    const MAX_CHARS = 50;
+    let currentLine: any[] = [];
+    let currentLen = 0;
+
+    timings.forEach((t) => {
+        if (currentLen + t.word.length > MAX_CHARS && currentLine.length > 0) {
+             const start = fmtTime(currentLine[0].start);
+             const end = fmtTime(currentLine[currentLine.length - 1].end);
+             const lineText = currentLine.map(x => x.word).join(' ');
+             content += `Dialogue: 0,${start},${end},Default,,0,0,0,,${lineText}\n`;
+             currentLine = [];
+             currentLen = 0;
+        }
+        currentLine.push(t);
+        currentLen += t.word.length + 1;
+    });
+
+    if (currentLine.length > 0) {
+        const start = fmtTime(currentLine[0].start);
+        const end = fmtTime(currentLine[currentLine.length - 1].end);
+        const lineText = currentLine.map(x => x.word).join(' ');
+        content += `Dialogue: 0,${start},${end},Default,,0,0,0,,${lineText}\n`;
+    }
+
+    fs.writeFileSync(filePath, content);
+}
+
+
 export async function renderVideo(job: RenderJob): Promise<string> {
     const jobId = uuidv4();
     const jobDir = path.join(TEMP_DIR, jobId);
@@ -55,90 +117,114 @@ export async function renderVideo(job: RenderJob): Promise<string> {
     const width = 1280;
     const height = 720;
 
-    // Pastikan font ada, atau cari alternatif (untuk robustness)
-    let fontPath = '';
-    if (fs.existsSync(FONT_PATH_DEJAVU)) {
-        fontPath = FONT_PATH_DEJAVU;
-    } else {
-        // Fallback: biarkan kosong, ffmpeg akan mencoba font default sistem atau error jika strict
-        console.warn("Warning: DejaVu font not found at expected path. Subtitles might fail or use default.");
-    }
-
     try {
         const segmentFiles: string[] = [];
 
         // 1. Process Segments
         for (let i = 0; i < job.segments.length; i++) {
             const seg = job.segments[i];
-            const media = seg.media[0];
+            const segOutputPath = path.join(jobDir, `seg_${i}.mp4`);
             
-            const mediaPath = await saveAsset(media.url, jobId, media.type);
-            
+            // Download Narration Audio
             let audioPath = null;
             if (seg.audioUrl) {
                 audioPath = await saveAsset(seg.audioUrl, jobId, 'audio');
             }
 
-            const segOutputPath = path.join(jobDir, `seg_${i}.mp4`);
-            
+            // Process Visual Clips (Handle Multi-Clip with XFADE)
+            const clipInputs: { path: string, type: string, duration: number }[] = [];
+            const clipDuration = seg.duration / Math.max(1, seg.media.length);
+
+            for (const clip of seg.media) {
+                const clipPath = await saveAsset(clip.url, jobId, clip.type);
+                clipInputs.push({ path: clipPath, type: clip.type, duration: clipDuration });
+            }
+
+            // Create Subtitle File (.ass)
+            let assPath = '';
+            if (seg.narration_text) {
+                assPath = path.join(jobDir, `subs_${i}.ass`);
+                createASSFile(assPath, seg.narration_text, seg.wordTimings, seg.duration);
+            }
+
             await new Promise<void>((resolve, reject) => {
-                const segCmd = ffmpeg();
+                const cmd = ffmpeg();
                 
-                segCmd.input(mediaPath);
-                if (media.type === 'image') {
-                    segCmd.inputOptions(['-loop 1']);
-                }
+                // Add All Inputs
+                clipInputs.forEach(c => {
+                    cmd.input(c.path);
+                    if (c.type === 'image') cmd.inputOptions(['-loop 1']);
+                });
 
                 if (audioPath) {
-                    segCmd.input(audioPath);
+                    cmd.input(audioPath);
                 } else {
-                    segCmd.input('anullsrc=channel_layout=stereo:sample_rate=44100').inputFormat('lavfi');
+                    // Silence filler
+                    cmd.input('anullsrc=channel_layout=stereo:sample_rate=44100').inputFormat('lavfi');
                 }
 
-                const filters = [];
-                // Scale video/image to fit 720p
-                filters.push(`[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[vscaled]`);
-                
-                let videoOut = 'vscaled';
+                const filters: string[] = [];
+                const transitionDuration = 0.5; // 0.5s crossfade
+                let videoStreamLabel = '';
 
-                if (seg.narration_text) {
-                    // --- SOLUSI SILVER BULLET UNTUK SUBTITLE ---
-                    // Tulis teks ke file alih-alih memasukkannya ke command line
-                    // Ini menghindari masalah escaping karakter spesial (quotes, colon, backslash)
-                    const textFilePath = path.join(jobDir, `text_${i}.txt`);
-                    // Ganti newline dengan spasi agar jadi satu baris (opsional, tergantung preferensi tampilan)
-                    const sanitizedContent = seg.narration_text.replace(/\n/g, ' ');
-                    fs.writeFileSync(textFilePath, sanitizedContent, 'utf8');
+                // === MULTI-CLIP VISUAL PIPELINE ===
+                // 1. Scale & Setsar all inputs first
+                clipInputs.forEach((c, idx) => {
+                    // Scale to 720p, pad if needed, enforce SAR 1
+                    // trim=duration helps restrict images (which loop infinitely) to specific duration
+                    const label = `v${idx}`;
+                    filters.push(`[${idx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,trim=duration=${c.duration},setpts=PTS-STARTPTS[${label}]`);
+                });
 
-                    // Escape path untuk FFmpeg (windows backslash vs linux forward slash)
-                    // Di Docker Linux aman menggunakan forward slash
-                    const fontOption = fontPath ? `:fontfile='${fontPath}'` : '';
-                    const textFileOption = `:textfile='${textFilePath}'`;
-                    
-                    // Gunakan textfile=... alih-alih text='...'
-                    filters.push(`[${videoOut}]drawtext=${fontOption}${textFileOption}:fontcolor=white:fontsize=36:box=1:boxcolor=black@0.5:boxborderw=10:x=(w-text_w)/2:y=h-80[vtext]`);
-                    videoOut = 'vtext';
+                // 2. Chain XFADE if multiple clips
+                if (clipInputs.length > 1) {
+                    let prevLabel = 'v0';
+                    let currentOffset = clipInputs[0].duration;
+
+                    for (let j = 1; j < clipInputs.length; j++) {
+                        const nextLabel = `v${j}`;
+                        const outLabel = `mix${j}`;
+                        // Offset for xfade start = (accumulated time) - (transition duration)
+                        // Note: xfade consumes the overlap, so visual duration shrinks.
+                        // For simplicity in this auto-gen context, we assume simple dissolve.
+                        const xfadeOffset = currentOffset - transitionDuration;
+                        
+                        filters.push(`[${prevLabel}][${nextLabel}]xfade=transition=fade:duration=${transitionDuration}:offset=${xfadeOffset}[${outLabel}]`);
+                        
+                        prevLabel = outLabel;
+                        currentOffset += (clipInputs[j].duration - transitionDuration);
+                    }
+                    videoStreamLabel = prevLabel;
+                } else {
+                    videoStreamLabel = 'v0';
                 }
 
-                // FIX: Do NOT pass [videoOut] as second arg to complexFilter if you plan to map it manually later.
-                // Fluent-ffmpeg will try to auto-map it, causing "Stream already mapped" error.
-                segCmd.complexFilter(filters);
-                
-                segCmd.outputOptions([
-                    '-map', `[${videoOut}]`,
-                    '-map', audioPath ? '1:a' : '1:a',
+                // 3. Apply Subtitles (if existing)
+                if (assPath) {
+                    // Escape path for windows/linux compatibility in filter string
+                    // Note: In Docker Linux, forward slash is fine. 
+                    // Need to escape colon in path (e.g. C:/) but usually fine in linux relative paths
+                    const assFilterPath = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+                    filters.push(`[${videoStreamLabel}]subtitles=filename='${assFilterPath}'[vfinal]`);
+                    videoStreamLabel = 'vfinal';
+                }
+
+                cmd.complexFilter(filters);
+
+                cmd.outputOptions([
+                    '-map', `[${videoStreamLabel}]`,
+                    '-map', `${clipInputs.length}:a`, // Audio input is at index = length of clips
                     '-c:v', 'libx264',
-                    '-preset', 'ultrafast',
+                    '-preset', 'ultrafast', // Fast render
                     '-c:a', 'aac',
-                    '-shortest',
-                    `-t`, `${seg.duration}`
+                    `-t`, `${seg.duration}` // Hard limit duration to match segment
                 ]);
 
-                segCmd.save(segOutputPath)
+                cmd.save(segOutputPath)
                     .on('end', () => resolve())
                     .on('error', (err) => {
-                        console.error(`FFmpeg Segment ${i} Error Log:`, err);
-                        reject(new Error(`Error processing segment ${i}: ${err.message}`));
+                        console.error(`Segment ${i} Render Error:`, err);
+                        reject(err);
                     });
             });
 
@@ -182,6 +268,8 @@ export async function renderVideo(job: RenderJob): Promise<string> {
         }
 
         if (audioMixInputs.length > 1) {
+            // Mix all audio tracks (narration + bg music + sfx)
+            // duration=first ensures output matches video length
             complexFilters.push(`${audioMixInputs.join('')}amix=inputs=${audioMixInputs.length}:duration=first:dropout_transition=0[aout]`);
             finalCmd.outputOptions(['-map', '0:v', '-map', '[aout]']);
         } else {
@@ -193,7 +281,7 @@ export async function renderVideo(job: RenderJob): Promise<string> {
         }
 
         finalCmd.outputOptions([
-            '-c:v', 'copy',
+            '-c:v', 'copy', // Just copy video stream (saves re-encoding time)
             '-c:a', 'aac',
             '-shortest'
         ]);

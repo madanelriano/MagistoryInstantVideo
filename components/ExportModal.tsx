@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import type { Segment, AudioClip } from '../types';
 import LoadingSpinner from './LoadingSpinner';
 import { DownloadIcon } from './icons';
+import { estimateWordTimings } from '../utils/media';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -70,6 +71,14 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
             // Process Narration Audio
             if (segment.audioUrl && (segment.audioUrl.startsWith('blob:') || segment.audioUrl.startsWith('data:'))) {
                 segment.audioUrl = await convertBlobUrlToBase64(segment.audioUrl);
+            }
+
+            // Ensure word timings exist for subtitles
+            if (segment.narration_text && (!segment.wordTimings || segment.wordTimings.length === 0)) {
+                // If audio exists, use its duration, else use segment duration
+                const duration = segment.duration;
+                // Calculate linear timings as fallback
+                segment.wordTimings = estimateWordTimings(segment.narration_text, duration);
             }
         }
 
