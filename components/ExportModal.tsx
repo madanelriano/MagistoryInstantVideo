@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import type { Segment, AudioClip } from '../types';
 import LoadingSpinner from './LoadingSpinner';
@@ -138,10 +139,21 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                         
                         // 3. Download File
                         const downloadRes = await fetch(`${sanitizedUrl}/download/${jobId}`);
-                        if (!downloadRes.ok) throw new Error("Download failed");
+                        
+                        // STRICT CHECK: Ensure we got a video, not a JSON error
+                        const contentType = downloadRes.headers.get('content-type');
+                        if (contentType && contentType.includes('application/json')) {
+                            const errData = await downloadRes.json();
+                            throw new Error(errData.error || "Download endpoint returned JSON instead of Video.");
+                        }
+
+                        if (!downloadRes.ok) throw new Error("Download request failed");
                         
                         const blob = await downloadRes.blob();
-                        const url = URL.createObjectURL(blob);
+                        // Enforce MP4 type so browser treats it correctly
+                        const videoBlob = new Blob([blob], { type: 'video/mp4' });
+                        const url = URL.createObjectURL(videoBlob);
+                        
                         setVideoUrl(url);
                         setStatus('complete');
                     } else if (statusData.status === 'error') {
@@ -151,8 +163,13 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                         setStatusText("Rendering in cloud (Processing)...");
                     }
                 } catch (pollErr: any) {
-                    // Don't crash on single poll fail, wait for next tick or timeout
-                    console.warn("Poll failed", pollErr);
+                    console.warn("Poll loop error:", pollErr);
+                    // Don't clear interval immediately on network blip, unless it's a fatal error logic
+                    if (pollErr.message && pollErr.message.includes("returned JSON")) {
+                        clearInterval(pollIntervalRef.current);
+                        setError(pollErr.message);
+                        setStatus('error');
+                    }
                 }
             }, 3000); // Check every 3 seconds
 
@@ -217,8 +234,8 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                         <p className="text-xl font-semibold text-green-400 mb-4">Render Complete!</p>
                         <video src={videoUrl} controls className="w-full rounded-md mb-4 max-h-64 bg-black shadow-lg"></video>
                         <div className="flex gap-2">
-                            <a href={videoUrl} download={`${title.replace(/ /g, '_')}.mp4`} className="flex-1 py-3 bg-green-600 hover:bg-green-700 rounded-md text-white font-semibold flex items-center justify-center gap-2 transition-colors">
-                                <DownloadIcon /> Download
+                            <a href={videoUrl} download={`${title.replace(/[^a-z0-9]/gi, '_')}.mp4`} className="flex-1 py-3 bg-green-600 hover:bg-green-700 rounded-md text-white font-semibold flex items-center justify-center gap-2 transition-colors">
+                                <DownloadIcon /> Download MP4
                             </a>
                             <button onClick={handleClose} className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-md text-gray-200">
                                 Close
@@ -231,7 +248,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                     <div className="text-center">
                         <div className="bg-red-900/20 p-4 rounded-md mb-6 border border-red-900/50">
                             <h3 className="text-red-400 font-bold mb-1">Export Failed</h3>
-                            <p className="text-red-300 text-sm mb-4">{error}</p>
+                            <p className="text-red-300 text-sm mb-4 break-words">{error}</p>
                             
                             <div className="text-left">
                                 <label className="text-xs text-red-300 font-bold block mb-1">Verify Server URL:</label>
