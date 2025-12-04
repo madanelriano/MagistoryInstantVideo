@@ -29,6 +29,8 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
 
     // Poll interval ref
     const pollIntervalRef = useRef<any>(null);
+    // Track consecutive errors to prevent infinite loops on network failure
+    const consecutiveErrorsRef = useRef(0);
 
     useEffect(() => {
         return () => {
@@ -101,6 +103,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
         setStatus('preparing');
         setError('');
         setVideoUrl(null);
+        consecutiveErrorsRef.current = 0;
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
 
         // Remove trailing slash if present
@@ -138,8 +141,26 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
             pollIntervalRef.current = setInterval(async () => {
                 try {
                     const statusRes = await fetch(`${sanitizedUrl}/status/${jobId}`);
-                    if (!statusRes.ok) return; // Retry next tick
                     
+                    // Critical: Handle 404 (Job Lost/Server Restarted)
+                    if (statusRes.status === 404) {
+                        clearInterval(pollIntervalRef.current);
+                        throw new Error("Job not found on server. The server may have restarted. Please try again.");
+                    }
+
+                    if (!statusRes.ok) {
+                        consecutiveErrorsRef.current++;
+                        console.warn(`Status check failed (${statusRes.status}). Attempt ${consecutiveErrorsRef.current}/5`);
+                        if (consecutiveErrorsRef.current > 5) {
+                            clearInterval(pollIntervalRef.current);
+                            throw new Error(`Connection lost to server (${statusRes.status}).`);
+                        }
+                        return; // Retry next tick
+                    }
+                    
+                    // Reset consecutive errors on success
+                    consecutiveErrorsRef.current = 0;
+
                     const statusData = await statusRes.json();
                     
                     if (statusData.status === 'completed') {
@@ -173,11 +194,21 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                     }
                 } catch (pollErr: any) {
                     console.warn("Poll loop error:", pollErr);
-                    // Don't clear interval immediately on network blip, unless it's a fatal error logic
-                    if (pollErr.message && pollErr.message.includes("returned JSON")) {
-                        clearInterval(pollIntervalRef.current);
-                        setError(pollErr.message);
-                        setStatus('error');
+                    
+                    // If it's a fetch error (network down, CORS, Mixed Content), count it
+                    if (pollErr.name === 'TypeError' || pollErr.message.includes('Failed to fetch')) {
+                        consecutiveErrorsRef.current++;
+                        if (consecutiveErrorsRef.current > 5) {
+                            clearInterval(pollIntervalRef.current);
+                            setError("Connection to server lost. Check your network or server URL. (Mixed Content Error?)");
+                            setStatus('error');
+                            return;
+                        }
+                    } else {
+                         // Fatal logic error or explicitly thrown error
+                         clearInterval(pollIntervalRef.current);
+                         setError(pollErr.message);
+                         setStatus('error');
                     }
                 }
             }, 3000); // Check every 3 seconds
@@ -235,6 +266,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                         <div className="flex justify-center mb-6"><LoadingSpinner /></div>
                         <h3 className="text-lg font-semibold text-white mb-2">Processing</h3>
                         <p className="text-sm text-gray-400 animate-pulse">{statusText}</p>
+                        <p className="text-xs text-gray-500 mt-2">Do not close this window.</p>
                     </div>
                 )}
                 

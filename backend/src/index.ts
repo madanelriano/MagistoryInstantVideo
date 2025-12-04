@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import { renderVideo } from './renderer';
@@ -70,6 +71,9 @@ app.post('/render', async (req, res) => {
 app.get('/status/:jobId', (req, res) => {
     const jobId = req.params.jobId;
     const job = jobs.get(jobId);
+    
+    // Log the check to verify polling
+    console.log(`Status check for ${jobId}: ${job ? job.status : 'NOT FOUND'}`);
     
     if (!job) {
         return res.status(404).json({ error: 'Job not found' });
