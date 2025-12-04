@@ -1,93 +1,102 @@
 
 import React from 'react';
-import { MediaIcon, TextIcon, MusicIcon, EffectsIcon, ExportIcon, MagicWandIcon, UndoIcon, RedoIcon, TrashIcon } from './icons';
+import type { Segment, TextOverlayStyle } from '../types';
+import { MediaIcon, TextIcon, MusicIcon, EffectsIcon, MagicWandIcon, TrashIcon, ScissorsIcon, VolumeXIcon, LayersIcon, StyleIcon, BackArrowIcon } from './icons';
 
 interface ToolbarProps {
+    activeMenu: string | null;
+    setActiveMenu: (menu: string | null) => void;
+    onOpenMediaSearch: () => void;
+    onOpenAudioModal: (type: 'music' | 'sfx') => void;
     onOpenAITools: () => void;
-    onOpenAudioModal: () => void;
-    onOpenExportModal: () => void;
-    canUndo: boolean;
-    canRedo: boolean;
-    onUndo: () => void;
-    onRedo: () => void;
-    onDelete?: () => void;
-    hasActiveSegment?: boolean;
+    onSplit: () => void;
+    onDelete: () => void;
+    activeSegment: Segment | null;
+    onUpdateVolume: (id: string, vol: number) => void;
+    onUpdateText: (id: string, text: string) => void;
+    onAutoCaptions: () => void;
+    onUpdateStyle: (id: string, style: Partial<TextOverlayStyle>) => void;
 }
 
-const ToolButton: React.FC<{ icon: React.ReactNode; label: string; onClick?: () => void; disabled?: boolean; className?: string }> = ({ icon, label, onClick, disabled, className }) => (
+const ToolButton: React.FC<{ icon: React.ReactNode; label: string; onClick?: () => void; isActive?: boolean }> = ({ icon, label, onClick, isActive }) => (
   <button 
-    onClick={onClick || (() => (window as any).alert(`${label} feature coming soon!`))}
-    disabled={disabled}
-    className={`flex flex-col items-center justify-center gap-1.5 transition-all p-2 rounded-lg group md:w-full min-w-[50px]
-      ${disabled ? 'text-zinc-600 cursor-not-allowed' : 'text-zinc-400 hover:text-white hover:bg-white/5'}
-      ${className || ''}
-    `}
-    title={label}
-    >
-    <div className="group-hover:scale-110 transition-transform">{icon}</div>
-    <span className="text-[9px] font-medium tracking-wide uppercase hidden md:block opacity-70 group-hover:opacity-100">{label}</span>
+    onClick={onClick}
+    className={`flex flex-col items-center justify-center gap-1 min-w-[64px] h-full transition-colors ${isActive ? 'text-white' : 'text-gray-400 hover:text-gray-200'}`}
+  >
+    <div className={`p-1 rounded-full ${isActive ? 'bg-gray-800' : ''}`}>{icon}</div>
+    <span className="text-[10px] font-medium">{label}</span>
   </button>
 );
 
 const Toolbar: React.FC<ToolbarProps> = ({ 
-    onOpenAITools, 
-    onOpenAudioModal, 
-    onOpenExportModal,
-    canUndo,
-    canRedo,
-    onUndo,
-    onRedo,
-    onDelete,
-    hasActiveSegment = true
+    activeMenu, setActiveMenu, onOpenMediaSearch, onOpenAudioModal, onOpenAITools, 
+    onSplit, onDelete, activeSegment, onUpdateVolume, onUpdateText, onAutoCaptions, onUpdateStyle
 }) => {
-  return (
-    <div className="flex md:flex-col flex-row items-center justify-around md:justify-start gap-1 md:gap-0 w-full h-full md:pb-4 bg-zinc-900/50">
-        
-        {/* ASSETS GROUP */}
-        <div className="flex md:flex-col flex-row gap-1 w-full md:py-4 md:border-b border-white/5 pr-2 md:pr-0">
-            <ToolButton icon={<MediaIcon className="w-5 h-5" />} label="Media" />
-            <ToolButton icon={<TextIcon className="w-5 h-5" />} label="Text" />
-            <ToolButton icon={<MusicIcon className="w-5 h-5" />} label="Audio" onClick={onOpenAudioModal} />
-        </div>
-        
-        {/* AI GROUP */}
-        <div className="flex md:flex-col flex-row gap-1 w-full md:py-4 md:border-b border-white/5 pr-2 md:pr-0">
-             <ToolButton 
-                icon={<MagicWandIcon className="w-6 h-6 text-purple-500 group-hover:text-purple-400" />} 
-                label="AI Magic" 
-                onClick={onOpenAITools} 
-                className="bg-purple-900/10 hover:bg-purple-900/20"
-            />
-        </div>
-        
-        {/* EDIT GROUP */}
-        <div className="flex md:flex-col flex-row gap-1 w-full md:py-4">
-            <ToolButton icon={<UndoIcon className="w-5 h-5" />} label="Undo" onClick={onUndo} disabled={!canUndo} />
-            <ToolButton icon={<RedoIcon className="w-5 h-5" />} label="Redo" onClick={onRedo} disabled={!canRedo} />
-            
-            {onDelete && (
-                <ToolButton 
-                    icon={<TrashIcon className="w-5 h-5" />} 
-                    label="Delete" 
-                    onClick={onDelete} 
-                    disabled={!hasActiveSegment}
-                    className="text-red-900/60 hover:text-red-400 hover:bg-red-900/10"
-                />
-            )}
-        </div>
 
-        {/* Spacer for Desktop */}
-        <div className="hidden md:block md:flex-grow"></div>
-        
-        {/* EXPORT GROUP */}
-         <button 
-            onClick={onOpenExportModal}
-            className="flex flex-col items-center justify-center gap-1 text-white bg-purple-600 hover:bg-purple-500 transition-all w-10 h-10 md:w-12 md:h-12 rounded-full md:mt-auto shadow-lg shadow-purple-900/40 hover:scale-110 ml-2 md:ml-0 md:mb-2"
-            title="Export Video"
-        >
-            <ExportIcon className="w-5 h-5" />
-        </button>
-        <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-wider hidden md:block pb-2">Export</span>
+  // --- SUB-MENUS ---
+
+  // EDIT MENU
+  if (activeMenu === 'edit') {
+      return (
+          <div className="flex items-center h-full px-4 gap-6 overflow-x-auto bg-[#111]">
+              <button onClick={() => setActiveMenu(null)} className="mr-2 text-gray-400 hover:text-white"><BackArrowIcon /></button>
+              <ToolButton icon={<ScissorsIcon />} label="Split" onClick={onSplit} />
+              <ToolButton icon={<TrashIcon />} label="Delete" onClick={onDelete} />
+              <div className="w-px h-8 bg-gray-800 mx-2"></div>
+              <ToolButton icon={<LayersIcon />} label="Replace" onClick={onOpenMediaSearch} />
+              <div className="flex items-center gap-2">
+                  <span className="text-xs text-gray-400">Vol</span>
+                  <input 
+                    type="range" min="0" max="1" step="0.1" 
+                    value={activeSegment?.audioVolume ?? 1} 
+                    onChange={(e) => activeSegment && onUpdateVolume(activeSegment.id, parseFloat(e.target.value))}
+                    className="w-24 h-1 bg-gray-600 rounded-lg accent-white"
+                  />
+              </div>
+          </div>
+      )
+  }
+
+  // AUDIO MENU
+  if (activeMenu === 'audio') {
+      return (
+          <div className="flex items-center h-full px-4 gap-6 overflow-x-auto bg-[#111]">
+              <button onClick={() => setActiveMenu(null)} className="mr-2 text-gray-400 hover:text-white"><BackArrowIcon /></button>
+              <ToolButton icon={<MusicIcon />} label="Add Music" onClick={() => onOpenAudioModal('music')} />
+              <ToolButton icon={<VolumeXIcon />} label="Sound FX" onClick={() => onOpenAudioModal('sfx')} />
+              <ToolButton icon={<MagicWandIcon />} label="AI Voice" onClick={onOpenAITools} />
+          </div>
+      )
+  }
+
+  // TEXT MENU
+  if (activeMenu === 'text') {
+      return (
+          <div className="flex items-center h-full px-4 gap-6 overflow-x-auto bg-[#111]">
+              <button onClick={() => setActiveMenu(null)} className="mr-2 text-gray-400 hover:text-white"><BackArrowIcon /></button>
+              <ToolButton icon={<TextIcon />} label="Add Text" onClick={() => {
+                  const text = prompt("Enter Caption:", activeSegment?.narration_text);
+                  if (text !== null && activeSegment) onUpdateText(activeSegment.id, text);
+              }} />
+              <ToolButton icon={<StyleIcon />} label="Auto Captions" onClick={onAutoCaptions} />
+              <div className="w-px h-8 bg-gray-800 mx-2"></div>
+              {/* Simple Style Toggles */}
+              <button onClick={() => activeSegment && onUpdateStyle(activeSegment.id, { color: '#EAB308' })} className="w-6 h-6 rounded-full bg-yellow-500 border border-white/20"></button>
+              <button onClick={() => activeSegment && onUpdateStyle(activeSegment.id, { color: '#FFFFFF' })} className="w-6 h-6 rounded-full bg-white border border-white/20"></button>
+              <button onClick={() => activeSegment && onUpdateStyle(activeSegment.id, { fontSize: 40 })} className="text-xs text-gray-300 font-bold border border-gray-600 px-2 rounded">Aa</button>
+          </div>
+      )
+  }
+
+  // MAIN MENU (Default)
+  return (
+    <div className="flex items-center justify-between md:justify-center h-full px-4 gap-2 md:gap-8 overflow-x-auto">
+        <ToolButton icon={<ScissorsIcon />} label="Edit" onClick={() => setActiveMenu('edit')} />
+        <ToolButton icon={<MusicIcon />} label="Audio" onClick={() => setActiveMenu('audio')} />
+        <ToolButton icon={<TextIcon />} label="Text" onClick={() => setActiveMenu('text')} />
+        <ToolButton icon={<EffectsIcon />} label="Effects" onClick={() => alert("Effects coming soon")} />
+        <ToolButton icon={<LayersIcon />} label="Overlay" onClick={onOpenMediaSearch} />
+        <ToolButton icon={<MagicWandIcon className="text-purple-400" />} label="AI Tools" onClick={onOpenAITools} />
     </div>
   );
 };
