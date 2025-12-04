@@ -18,6 +18,7 @@ interface PixabayVideo {
     videos: {
         medium: { url: string };
         small: { url: string };
+        tiny: { url: string };
     };
     user: string;
 }
@@ -79,8 +80,10 @@ export async function searchPixabayVideos(query: string, orientation: 'landscape
             image: `https://i.vimeocdn.com/video/${hit.picture_id}_640x360.jpg`, 
             video_files: [
                 // Map Pixabay format to Pexels-like format for compatibility
+                // Prioritize smaller sizes for preview/quota saving
                 { quality: 'hd', link: hit.videos.medium.url }, 
-                { quality: 'sd', link: hit.videos.small.url }
+                { quality: 'sd', link: hit.videos.small.url },
+                { quality: 'tiny', link: hit.videos.tiny.url }
             ],
             user: {
                 name: hit.user
