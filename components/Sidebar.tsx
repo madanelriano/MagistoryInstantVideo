@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { MediaIcon, MusicIcon, TextIcon, MagicWandIcon, EffectsIcon } from './icons';
+import { MediaIcon, MusicIcon, TextIcon, MagicWandIcon } from './icons';
 
 interface SidebarProps {
   activeTab: string;
@@ -16,19 +16,22 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
   ];
 
   return (
-    <div className="w-16 flex-shrink-0 bg-[#060606] border-r border-gray-800 flex flex-col items-center py-4 gap-2 z-20">
+    <div className="w-[60px] flex-shrink-0 bg-[#161616] border-r border-black/50 flex flex-col items-center py-4 gap-4 z-20">
       {tabs.map((tab) => (
         <button
           key={tab.id}
           onClick={() => setActiveTab(tab.id)}
-          className={`flex flex-col items-center justify-center w-14 h-14 rounded-lg transition-all duration-200 group ${
+          className={`flex flex-col items-center justify-center w-10 h-10 rounded-md transition-all duration-200 group relative ${
             activeTab === tab.id
-              ? 'bg-gray-800 text-purple-400'
-              : 'text-gray-400 hover:text-gray-100 hover:bg-gray-800/50'
+              ? 'text-purple-400'
+              : 'text-gray-500 hover:text-gray-300'
           }`}
         >
-          <div className="w-6 h-6 mb-1">{tab.icon}</div>
-          <span className="text-[9px] font-medium">{tab.label}</span>
+          {activeTab === tab.id && <div className="absolute -left-3 w-1 h-6 bg-purple-500 rounded-r-full"></div>}
+          <div className="w-6 h-6">{tab.icon}</div>
+          <span className="text-[8px] font-medium mt-1 opacity-0 group-hover:opacity-100 absolute left-12 bg-gray-800 px-2 py-1 rounded text-white whitespace-nowrap z-50 pointer-events-none transition-opacity">
+              {tab.label}
+          </span>
         </button>
       ))}
     </div>

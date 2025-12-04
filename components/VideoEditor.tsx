@@ -1,15 +1,15 @@
 
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import type { VideoScript, Segment, TransitionEffect, TextOverlayStyle, WordTiming, MediaClip, AudioClip } from '../types';
 import PreviewWindow from './PreviewWindow';
 import Timeline from './Timeline';
-import Sidebar from './Sidebar';
 import ResourcePanel from './ResourcePanel';
 import PropertiesPanel from './PropertiesPanel';
 import AIToolsModal from './AIToolsModal';
 import ExportModal from './ExportModal';
-import { estimateWordTimings } from '../utils/media';
-import { UndoIcon, RedoIcon } from './icons';
+import { UndoIcon, RedoIcon, ExportIcon, MediaIcon, MusicIcon, TextIcon, MagicWandIcon, ChevronLeftIcon } from './icons';
+import { estimateWordTimings, getAudioDuration } from '../utils/media';
 
 interface VideoEditorProps {
   initialScript: VideoScript;
@@ -42,8 +42,11 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   const lastTimeRef = useRef<number>(0);
 
   // --- UI STATE ---
-  const [activeSidebarTab, setActiveSidebarTab] = useState('media');
+  const [activeResourceTab, setActiveResourceTab] = useState('media');
+  const [resourceAudioType, setResourceAudioType] = useState<'music' | 'sfx'>('music');
+  const [isResourcePanelOpen, setIsResourcePanelOpen] = useState(false);
   const [activeSegmentId, setActiveSegmentId] = useState<string | null>(segments[0]?.id || null);
+  const [activeAudioTrackId, setActiveAudioTrackId] = useState<string | null>(null);
   const [timelineZoom, setTimelineZoom] = useState(1);
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isAIToolsOpen, setIsAIToolsOpen] = useState(false);
@@ -99,12 +102,24 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
       });
   }, []);
 
+  // Selection Handlers (Mutual Exclusion)
+  const handleSelectSegment = useCallback((id: string | null) => {
+      setActiveSegmentId(id);
+      if (id) setActiveAudioTrackId(null);
+  }, []);
+
+  const handleSelectAudioTrack = useCallback((id: string | null) => {
+      setActiveAudioTrackId(id);
+      if (id) setActiveSegmentId(null);
+  }, []);
+
   useEffect(() => {
       if (isPlaying) {
           let elapsed = 0;
           for (const seg of segments) {
               if (currentTime >= elapsed && currentTime < elapsed + seg.duration) {
-                  if (activeSegmentId !== seg.id) {
+                  // Only auto-switch segment if we are NOT strictly editing an audio track
+                  if (activeSegmentId !== seg.id && !activeAudioTrackId) {
                       setActiveSegmentId(seg.id);
                   }
                   break;
@@ -112,7 +127,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
               elapsed += seg.duration;
           }
       }
-  }, [currentTime, isPlaying, segments]); 
+  }, [currentTime, isPlaying, segments, activeSegmentId, activeAudioTrackId]); 
 
   // Segment Safety
   useEffect(() => {
@@ -123,6 +138,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
 
   const activeSegmentIndex = segments.findIndex(s => s.id === activeSegmentId);
   const activeSegment = segments[activeSegmentIndex] || null;
+  const activeAudioTrack = audioTracks.find(t => t.id === activeAudioTrackId) || null;
 
   // --- PLAYBACK LOGIC ---
   const togglePlay = useCallback(() => {
@@ -132,15 +148,19 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   const handleSeek = useCallback((time: number) => {
       const clampedTime = Math.max(0, Math.min(time, totalDuration));
       setCurrentTime(clampedTime);
-      let elapsed = 0;
-      for (const seg of segments) {
-          if (clampedTime >= elapsed && clampedTime < elapsed + seg.duration) {
-              setActiveSegmentId(seg.id);
-              break;
-          }
-          elapsed += seg.duration;
+      
+      // Auto-select logic on manual seek if we aren't focused on audio
+      if (!activeAudioTrackId) {
+        let elapsed = 0;
+        for (const seg of segments) {
+            if (clampedTime >= elapsed && clampedTime < elapsed + seg.duration) {
+                setActiveSegmentId(seg.id);
+                break;
+            }
+            elapsed += seg.duration;
+        }
       }
-  }, [totalDuration, segments]);
+  }, [totalDuration, segments, activeAudioTrackId]);
 
   useEffect(() => {
       if (isPlaying) {
@@ -166,44 +186,74 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   }, [isPlaying, totalDuration]);
 
 
-  // --- HANDLERS (Same as before, adapted for direct calls) ---
+  // --- HANDLERS ---
   const handleUpdateSegmentText = useCallback((segmentId: string, newText: string) => {
     updateSegments(prev => prev.map(s => s.id === segmentId ? { ...s, narration_text: newText, wordTimings: undefined } : s));
   }, [updateSegments]);
   
-  // Replaces Modal Selection
   const handleResourceSelectMedia = useCallback((newUrl: string, type: 'image' | 'video') => {
       if (!activeSegmentId) return;
-      // Replace media of currently selected segment
       updateSegments(prev => prev.map(s => {
         if (s.id !== activeSegmentId) return s;
-        // Simple replace of first clip for this demo, or append? CapCut usually adds to track. 
-        // For this app logic: Replace the clip in the segment.
         return { 
             ...s, 
             media: [{ id: `clip-${Date.now()}`, url: newUrl, type }] 
         };
       }));
+      if (window.innerWidth < 768) setIsResourcePanelOpen(false);
   }, [activeSegmentId, updateSegments]);
 
-  const handleResourceSelectAudio = useCallback((url: string, name: string) => {
-      // Add as background track
+  const handleResourceSelectAudio = useCallback(async (url: string, name: string, type: 'music' | 'sfx' = 'music') => {
+      let duration = 10;
+      try {
+          const detectedDuration = await getAudioDuration(url);
+          if (detectedDuration > 0) duration = detectedDuration;
+      } catch (e) {
+          console.warn("Could not detect audio duration", e);
+      }
+
       updateAudioTracks(prev => [...prev, { 
           id: `audio-${Date.now()}`, 
           url, 
           name, 
-          type: 'music', 
+          type: type, 
           startTime: currentTime, 
-          duration: 10, 
-          volume: 0.8 
+          duration: duration, 
+          volume: type === 'music' ? 0.5 : 0.8 
       }]);
+      if (window.innerWidth < 768) setIsResourcePanelOpen(false);
   }, [updateAudioTracks, currentTime]);
 
   const handleResourceAddText = useCallback((text: string) => {
       if (activeSegmentId) {
           handleUpdateSegmentText(activeSegmentId, text);
       }
+      if (window.innerWidth < 768) setIsResourcePanelOpen(false);
   }, [activeSegmentId, handleUpdateSegmentText]);
+
+  const handleAutoCaptions = useCallback(() => {
+    updateSegments(prev => prev.map(s => {
+      if (!s.narration_text) return s;
+      const timings = estimateWordTimings(s.narration_text, s.duration);
+      const existingStyle: Partial<TextOverlayStyle> = s.textOverlayStyle || {};
+      const newStyle: TextOverlayStyle = {
+          fontFamily: existingStyle.fontFamily || 'Arial, sans-serif',
+          fontSize: existingStyle.fontSize && existingStyle.fontSize < 40 ? existingStyle.fontSize : 24,
+          color: existingStyle.color || '#FFFFFF',
+          position: 'bottom',
+          backgroundColor: 'rgba(0,0,0,0.6)',
+          animation: 'highlight',
+          maxCaptionLines: 2,
+      };
+
+      return {
+        ...s,
+        wordTimings: timings,
+        textOverlayStyle: newStyle
+      }
+    }));
+    if (window.innerWidth < 768) setIsResourcePanelOpen(false);
+  }, [updateSegments]);
 
 
   const handleUpdateSegmentAudio = useCallback((segmentId: string, newAudioUrl: string | undefined, audioDuration?: number) => {
@@ -231,10 +281,8 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   }, [updateSegments]);
 
   const handleSplitSegment = useCallback((segmentId: string, splitTime: number) => {
-    // Logic kept but usage moved to Properties or Shortcut (not simplified UI)
     const original = segments.find(s => s.id === segmentId);
     if (!original || splitTime < 0.5 || splitTime > original.duration - 0.5) return;
-    // ... split implementation existing ...
     const index = segments.indexOf(original);
     const durA = splitTime;
     const durB = original.duration - splitTime;
@@ -246,153 +294,271 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
     setActiveSegmentId(segA.id);
   }, [segments, updateSegments]);
 
+  const handleSplitActiveSegment = useCallback(() => {
+    if (!activeSegmentId) return;
+    const index = segments.findIndex(s => s.id === activeSegmentId);
+    if (index === -1) return;
+    let startTime = 0;
+    for (let i = 0; i < index; i++) {
+        startTime += segments[i].duration;
+    }
+    const relativeTime = currentTime - startTime;
+    handleSplitSegment(activeSegmentId, relativeTime);
+  }, [activeSegmentId, segments, currentTime, handleSplitSegment]);
+
   const handleDeleteSegment = useCallback(() => {
     if (!activeSegmentId) return;
     updateSegments(prev => {
         if (prev.length <= 1) return prev;
         return prev.filter(s => s.id !== activeSegmentId);
     });
+    // Reset selection
+    setActiveSegmentId(null);
   }, [activeSegmentId, updateSegments]);
 
-  // Audio Track handlers
+  const handleAddSegment = useCallback(() => {
+      const newSegment: Segment = {
+        id: `segment-${Date.now()}`,
+        narration_text: "New Scene",
+        search_keywords_for_media: "",
+        media: [{ id: `clip-${Date.now()}`, url: "https://placehold.co/1280x720/1f2937/ffffff?text=Select+Media", type: 'image' }],
+        duration: 3,
+        audioVolume: 1,
+        transition: 'fade',
+        textOverlayStyle: {
+            fontFamily: 'Arial, sans-serif',
+            fontSize: 40,
+            color: '#EAB308',
+            position: 'bottom',
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            animation: 'scale',
+            maxCaptionLines: 2,
+        }
+      };
+      updateSegments(prev => [...prev, newSegment]);
+      handleSelectSegment(newSegment.id);
+      setActiveResourceTab('media');
+      setIsResourcePanelOpen(true);
+  }, [updateSegments, handleSelectSegment]);
+
+  const handleTimelineAddAudio = useCallback((type: 'music' | 'sfx' = 'music') => {
+      setResourceAudioType(type);
+      setActiveResourceTab('audio');
+      setIsResourcePanelOpen(true);
+  }, []);
+
   const handleUpdateAudioTrack = useCallback((trackId: string, updates: Partial<AudioClip>) => {
       updateAudioTracks(prev => prev.map(t => t.id === trackId ? { ...t, ...updates } : t));
   }, [updateAudioTracks]);
 
   const handleDeleteAudioTrack = useCallback((trackId: string) => {
       updateAudioTracks(prev => prev.filter(t => t.id !== trackId));
-  }, [updateAudioTracks]);
+      if (activeAudioTrackId === trackId) setActiveAudioTrackId(null);
+  }, [updateAudioTracks, activeAudioTrackId]);
+
+  const handleDockClick = (tab: string) => {
+    if (activeResourceTab === tab && isResourcePanelOpen) {
+      setIsResourcePanelOpen(false);
+    } else {
+      setActiveResourceTab(tab);
+      setIsResourcePanelOpen(true);
+    }
+  };
 
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[#0a0a0a] text-white font-sans overflow-hidden">
+    <div className="flex flex-col h-screen w-full bg-[#121212] text-gray-100 font-sans overflow-hidden">
         
-        {/* TOP BAR / MENU */}
-        <div className="h-14 bg-[#121212] border-b border-gray-800 flex items-center justify-between px-4 z-50 flex-shrink-0">
-             <div className="flex items-center gap-4">
-                 <button className="text-gray-400 hover:text-white" onClick={() => window.location.reload()}>
-                    <div className="font-bold text-lg text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-500">Magistory</div>
+        {/* TOP HEADER */}
+        <div className="h-12 md:h-14 bg-[#1e1e1e] border-b border-black/50 flex items-center justify-between px-3 md:px-4 z-50 flex-shrink-0 shadow-md">
+             <div className="flex items-center gap-3">
+                 <button className="flex items-center gap-2 hover:opacity-80 transition-opacity" onClick={() => window.location.reload()}>
+                    <div className="w-7 h-7 md:w-8 md:h-8 bg-gradient-to-br from-purple-600 to-indigo-600 rounded-lg flex items-center justify-center shadow-lg">
+                        <span className="font-bold text-white text-base md:text-lg">M</span>
+                    </div>
                  </button>
-                 <div className="h-4 w-px bg-gray-700 mx-2"></div>
-                 <input 
-                    value={title} 
-                    onChange={e => setTitle(e.target.value)} 
-                    className="bg-transparent text-gray-300 text-sm focus:text-white outline-none w-48 hover:bg-white/5 px-2 py-1 rounded"
-                />
+                 <div className="flex flex-col">
+                    <input 
+                        value={title} 
+                        onChange={e => setTitle(e.target.value)} 
+                        className="bg-transparent text-gray-200 text-sm font-medium focus:text-white outline-none hover:bg-white/5 px-2 rounded transition-colors w-32 md:w-64"
+                        placeholder="Untitled Project"
+                    />
+                 </div>
              </div>
             
-            <div className="flex items-center gap-2">
-                 <div className="flex bg-black/20 rounded-md p-0.5 mr-4">
-                    <button onClick={handleUndo} disabled={history.past.length === 0} className="p-2 text-gray-400 hover:text-white disabled:opacity-30"><UndoIcon className="w-4 h-4" /></button>
-                    <button onClick={handleRedo} disabled={history.future.length === 0} className="p-2 text-gray-400 hover:text-white disabled:opacity-30"><RedoIcon className="w-4 h-4" /></button>
+            <div className="flex items-center gap-2 md:gap-3">
+                 <div className="hidden md:flex items-center bg-[#2a2a2a] rounded-md p-0.5 border border-white/5">
+                    <button onClick={handleUndo} disabled={history.past.length === 0} className="p-2 text-gray-400 hover:text-white disabled:opacity-30 hover:bg-white/5 rounded"><UndoIcon className="w-4 h-4" /></button>
+                    <div className="w-px h-4 bg-gray-700"></div>
+                    <button onClick={handleRedo} disabled={history.future.length === 0} className="p-2 text-gray-400 hover:text-white disabled:opacity-30 hover:bg-white/5 rounded"><RedoIcon className="w-4 h-4" /></button>
                 </div>
-                <button onClick={() => setIsExportOpen(true)} className="px-5 py-1.5 bg-cyan-600 rounded-lg text-xs font-bold hover:bg-cyan-500 text-white shadow-lg shadow-cyan-900/20">
-                    Export
+                <button 
+                    onClick={() => setIsExportOpen(true)} 
+                    className="flex items-center gap-2 px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 rounded-md text-xs md:text-sm font-semibold hover:from-purple-500 hover:to-indigo-500 text-white shadow-lg transition-all"
+                >
+                    <ExportIcon className="w-4 h-4" /> <span className="hidden md:inline">Export</span>
                 </button>
             </div>
         </div>
 
-        {/* WORKSPACE AREA (Grid) */}
-        <div className="flex-grow flex overflow-hidden">
+        {/* MAIN LAYOUT */}
+        <div className="flex-grow flex flex-col relative overflow-hidden">
              
-             {/* LEFT SIDEBAR (Icons) */}
-             <Sidebar activeTab={activeSidebarTab} setActiveTab={setActiveSidebarTab} />
+             {/* PREVIEW AREA */}
+             <div className="flex-grow flex flex-col relative bg-[#0f0f0f] overflow-hidden">
+                <div className="absolute inset-0 opacity-10 pointer-events-none" 
+                        style={{ 
+                            backgroundImage: `
+                            linear-gradient(45deg, #333 25%, transparent 25%), 
+                            linear-gradient(-45deg, #333 25%, transparent 25%), 
+                            linear-gradient(45deg, transparent 75%, #333 75%), 
+                            linear-gradient(-45deg, transparent 75%, #333 75%)
+                            `,
+                            backgroundSize: '20px 20px',
+                            backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px' 
+                        }}>
+                </div>
 
-             {/* RESOURCE PANEL (Slide out) */}
-             <ResourcePanel 
-                activeTab={activeSidebarTab}
-                onSelectMedia={handleResourceSelectMedia}
-                onSelectAudio={handleResourceSelectAudio}
-                onAddText={handleResourceAddText}
-                onOpenAITools={() => setIsAIToolsOpen(true)}
-             />
-
-             {/* CENTER PREVIEW STAGE */}
-             <div className="flex-grow bg-[#0a0a0a] flex flex-col relative min-w-0">
-                <div className="flex-grow flex items-center justify-center p-8 bg-[#0a0a0a] bg-[radial-gradient(#1a1a1a_1px,transparent_1px)] [background-size:16px_16px]">
-                    <div className="relative shadow-2xl shadow-black ring-1 ring-white/10" style={{ height: '80%', aspectRatio: '16/9' }}>
-                        <PreviewWindow 
-                            title={title}
-                            onTitleChange={setTitle}
-                            segments={segments} 
-                            activeSegmentId={activeSegmentId!}
-                            onUpdateSegments={updateSegments} 
-                            segment={activeSegment || segments[0]} 
-                            currentTime={currentTime} isPlaying={isPlaying} totalDuration={totalDuration}
-                            onPlayPause={togglePlay} onSeek={handleSeek}
-                            // Callbacks for preview window direct manipulation if enabled
-                            onTextChange={handleUpdateSegmentText}
-                            onUpdateAudio={handleUpdateSegmentAudio}
-                            onUpdateWordTimings={handleUpdateWordTimings}
-                            onUpdateTextOverlayStyle={handleUpdateSegmentTextOverlayStyle}
-                            onUpdateDuration={handleUpdateSegmentDuration}
-                            onUpdateTransition={handleUpdateSegmentTransition}
-                            onUpdateVolume={handleUpdateSegmentVolume}
-                            isLastSegment={false}
-                            onOpenMediaSearch={() => {}} 
-                            onRemoveMedia={() => {}}
-                            onEditClipWithAI={() => {}}
-                            onReorderClips={() => {}}
-                            onSplitSegment={handleSplitSegment}
-                        />
+                <div className="flex-grow flex items-center justify-center p-2 md:p-4 z-10">
+                    <div className="relative shadow-2xl bg-black ring-1 ring-white/10 w-full h-full max-h-full flex items-center justify-center">
+                         <div className="relative w-full h-full max-w-full max-h-full aspect-video md:aspect-auto flex items-center justify-center">
+                            <PreviewWindow 
+                                title={title}
+                                onTitleChange={setTitle}
+                                segments={segments} 
+                                activeSegmentId={activeSegmentId!}
+                                onUpdateSegments={updateSegments} 
+                                segment={activeSegment || segments[0]} 
+                                currentTime={currentTime} isPlaying={isPlaying} totalDuration={totalDuration}
+                                onPlayPause={togglePlay} onSeek={handleSeek}
+                                onTextChange={handleUpdateSegmentText}
+                                onUpdateAudio={handleUpdateSegmentAudio}
+                                onUpdateWordTimings={handleUpdateWordTimings}
+                                onUpdateTextOverlayStyle={handleUpdateSegmentTextOverlayStyle}
+                                onUpdateDuration={handleUpdateSegmentDuration}
+                                onUpdateTransition={handleUpdateSegmentTransition}
+                                onUpdateVolume={handleUpdateSegmentVolume}
+                                isLastSegment={false}
+                                onOpenMediaSearch={() => {}} 
+                                onRemoveMedia={() => {}}
+                                onEditClipWithAI={() => {}}
+                                onReorderClips={() => {}}
+                                onSplitSegment={handleSplitSegment}
+                            />
+                         </div>
                     </div>
                 </div>
-                
-                {/* TIMELINE AREA (Bottom of Center) */}
-                <div className="h-64 bg-[#121212] border-t border-gray-800 flex flex-col z-10 flex-shrink-0">
-                    <div className="h-8 border-b border-gray-800 flex items-center justify-between px-4 bg-[#161616]">
-                        <div className="flex gap-4 text-xs text-gray-400">
-                           <button onClick={() => setTimelineZoom(z => Math.max(0.5, z-0.2))} className="hover:text-white">-</button>
-                           <span>Zoom</span>
-                           <button onClick={() => setTimelineZoom(z => Math.min(3, z+0.2))} className="hover:text-white">+</button>
+
+                {isResourcePanelOpen && (
+                    <div className="fixed inset-0 md:absolute md:inset-auto md:top-4 md:left-4 md:bottom-4 md:w-[400px] bg-[#1e1e1e] md:rounded-xl shadow-2xl border-0 md:border border-gray-700 z-[60] flex flex-col overflow-hidden animate-slide-in-up md:animate-slide-in-left">
+                        <div className="flex justify-between items-center p-4 border-b border-gray-700 bg-[#252525]">
+                             <div className="flex items-center gap-2">
+                                <button onClick={() => setIsResourcePanelOpen(false)} className="md:hidden text-gray-400 hover:text-white">
+                                    <ChevronLeftIcon className="w-6 h-6" />
+                                </button>
+                                <span className="font-bold text-white capitalize text-lg">{activeResourceTab} Library</span>
+                             </div>
+                             <button onClick={() => setIsResourcePanelOpen(false)} className="hidden md:block text-gray-400 hover:text-white p-1 hover:bg-white/10 rounded-full">
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                             </button>
                         </div>
-                        <div className="text-xs text-gray-500 font-mono">
-                            {new Date(currentTime * 1000).toISOString().substr(14, 5)} / {new Date(totalDuration * 1000).toISOString().substr(14, 5)}
-                        </div>
-                    </div>
-                    <div className="flex-grow relative">
-                         <Timeline 
-                            segments={segments}
-                            audioTracks={audioTracks}
-                            onReorder={updateSegments}
-                            activeSegmentId={activeSegmentId}
-                            setActiveSegmentId={setActiveSegmentId}
-                            onUpdateTransition={handleUpdateSegmentTransition}
-                            onUpdateVolume={handleUpdateSegmentVolume}
-                            timelineZoom={timelineZoom}
-                            onNudgeSegment={() => {}}
-                            onAddSegment={() => {}} // Could trigger media tab
-                            onUpdateAudioTrack={handleUpdateAudioTrack}
-                            onDeleteAudioTrack={handleDeleteAudioTrack}
-                            onAddAudioTrack={() => setActiveSidebarTab('audio')}
-                            currentTime={currentTime}
-                            isPlaying={isPlaying}
-                            onSeek={handleSeek}
+                        <ResourcePanel 
+                            activeTab={activeResourceTab}
+                            initialAudioType={resourceAudioType}
+                            onSelectMedia={handleResourceSelectMedia}
+                            onSelectAudio={handleResourceSelectAudio}
+                            onAddText={handleResourceAddText}
+                            onOpenAITools={() => setIsAIToolsOpen(true)}
+                            onAutoCaptions={handleAutoCaptions}
                         />
                     </div>
+                )}
+             </div>
+
+             {/* PROPERTIES PANEL */}
+             <div className="flex-shrink-0 z-30 bg-[#1e1e1e] border-t border-b border-black/50 shadow-[0_-5px_15px_rgba(0,0,0,0.3)]">
+                 <PropertiesPanel 
+                    segment={activeSegment}
+                    audioTrack={activeAudioTrack}
+                    onUpdateAudioTrack={handleUpdateAudioTrack}
+                    onDeleteAudioTrack={handleDeleteAudioTrack}
+                    onUpdateVolume={handleUpdateSegmentVolume}
+                    onUpdateText={handleUpdateSegmentText}
+                    onUpdateStyle={handleUpdateSegmentTextOverlayStyle}
+                    onUpdateTransition={handleUpdateSegmentTransition}
+                    onDelete={handleDeleteSegment}
+                    onOpenAITools={() => setIsAIToolsOpen(true)}
+                 />
+             </div>
+             
+             {/* TIMELINE */}
+             <div className="flex-shrink-0 h-[30vh] md:h-[280px] bg-[#161616] flex flex-col z-20 relative">
+                <div className="flex-grow relative overflow-hidden">
+                        <Timeline 
+                        segments={segments}
+                        audioTracks={audioTracks}
+                        onReorder={updateSegments}
+                        activeSegmentId={activeSegmentId}
+                        activeAudioTrackId={activeAudioTrackId}
+                        setActiveSegmentId={handleSelectSegment}
+                        onSelectAudioTrack={handleSelectAudioTrack}
+                        onUpdateTransition={handleUpdateSegmentTransition}
+                        onUpdateVolume={handleUpdateSegmentVolume}
+                        timelineZoom={timelineZoom}
+                        setTimelineZoom={setTimelineZoom}
+                        onNudgeSegment={() => {}}
+                        onAddSegment={handleAddSegment}
+                        onUpdateAudioTrack={handleUpdateAudioTrack}
+                        onDeleteAudioTrack={handleDeleteAudioTrack}
+                        onAddAudioTrack={handleTimelineAddAudio}
+                        currentTime={currentTime}
+                        isPlaying={isPlaying}
+                        onSeek={handleSeek}
+                        onSplit={handleSplitActiveSegment}
+                        onDelete={handleDeleteSegment}
+                    />
                 </div>
              </div>
 
-             {/* RIGHT PROPERTIES PANEL */}
-             <PropertiesPanel 
-                segment={activeSegment}
-                onUpdateVolume={handleUpdateSegmentVolume}
-                onUpdateText={handleUpdateSegmentText}
-                onUpdateStyle={handleUpdateSegmentTextOverlayStyle}
-                onUpdateTransition={handleUpdateSegmentTransition}
-                onDelete={handleDeleteSegment}
-             />
-
         </div>
 
-        {/* MODALS - Only for specialized heavy tasks now */}
+        {/* BOTTOM MENU DOCK */}
+        <div className="h-16 md:h-20 bg-[#18181b] border-t border-gray-800 flex items-center justify-evenly md:justify-center md:gap-8 z-50 shadow-[0_-5px_20px_rgba(0,0,0,0.5)] safe-area-bottom">
+            <DockButton 
+                icon={<MediaIcon className="w-5 h-5 md:w-6 md:h-6" />} 
+                label="Media" 
+                active={isResourcePanelOpen && activeResourceTab === 'media'} 
+                onClick={() => handleDockClick('media')} 
+            />
+            <DockButton 
+                icon={<MusicIcon className="w-5 h-5 md:w-6 md:h-6" />} 
+                label="Audio" 
+                active={isResourcePanelOpen && activeResourceTab === 'audio'} 
+                onClick={() => handleDockClick('audio')} 
+            />
+            <DockButton 
+                icon={<TextIcon className="w-5 h-5 md:w-6 md:h-6" />} 
+                label="Text" 
+                active={isResourcePanelOpen && activeResourceTab === 'text'} 
+                onClick={() => handleDockClick('text')} 
+            />
+            <DockButton 
+                icon={<MagicWandIcon className="w-5 h-5 md:w-6 md:h-6" />} 
+                label="AI Tools" 
+                active={isResourcePanelOpen && activeResourceTab === 'ai'} 
+                onClick={() => handleDockClick('ai')} 
+            />
+        </div>
+
+        {/* MODALS */}
         {isAIToolsOpen && activeSegment && (
             <AIToolsModal
                 isOpen={isAIToolsOpen}
                 onClose={() => setIsAIToolsOpen(false)}
                 segment={activeSegment}
                 activeClipId={activeSegment.media[0].id}
-                onUpdateMedia={(newUrl) => handleResourceSelectMedia(newUrl, 'image')} // Limitation: always image for now in AI tools
+                onUpdateMedia={(newUrl) => handleResourceSelectMedia(newUrl, 'image')}
                 onUpdateAudio={(newUrl, duration) => handleUpdateSegmentAudio(activeSegment.id, newUrl, duration)}
             />
         )}
@@ -407,5 +573,15 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
     </div>
   );
 };
+
+const DockButton: React.FC<{ icon: React.ReactNode, label: string, active: boolean, onClick: () => void }> = ({ icon, label, active, onClick }) => (
+    <button 
+        onClick={onClick}
+        className={`flex flex-col items-center justify-center gap-1 w-16 md:w-20 h-full transition-all duration-200 border-t-2 ${active ? 'border-purple-500 bg-white/5 text-purple-400' : 'border-transparent text-gray-400 hover:text-white hover:bg-white/5'}`}
+    >
+        <div className={`p-1.5 rounded-full ${active ? 'bg-purple-500/10' : ''}`}>{icon}</div>
+        <span className="text-[9px] md:text-[10px] font-bold uppercase tracking-wider">{label}</span>
+    </button>
+)
 
 export default VideoEditor;

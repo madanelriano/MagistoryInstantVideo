@@ -1,4 +1,3 @@
-
 import express from 'express';
 import cors from 'cors';
 import { renderVideo } from './renderer';
@@ -15,7 +14,7 @@ const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 
 app.use(express.json({ limit: '500mb' }));
-app.use(cors({ origin: '*' }));
+app.use(cors({ origin: '*' }) as any);
 
 const TEMP_DIR = path.join((process as any).cwd(), 'temp');
 if (!fs.existsSync(TEMP_DIR)) {
