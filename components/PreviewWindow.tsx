@@ -1,655 +1,146 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import type { Segment, TextOverlayStyle, WordTiming, TransitionEffect, MediaClip } from '../types';
-import { PlayIcon, MusicIcon, MagicWandIcon, EditIcon, TrashIcon } from './icons';
-import { generateSpeechFromText } from '../services/geminiService';
-import { createWavBlobUrl, estimateWordTimings, generateSubtitleChunks } from '../utils/media';
-import LoadingSpinner from './LoadingSpinner';
+import React, { useRef, useMemo, useEffect } from 'react';
+import type { Segment } from '../types';
+import { PlayIcon, PauseIcon, ChevronLeftIcon, ChevronRightIcon } from './icons';
+import { generateSubtitleChunks } from '../utils/media';
 
 interface PreviewWindowProps {
-  segment: Segment; // Active segment for preview
-  segments: Segment[]; // All segments for full script view
+  title: string;
+  onTitleChange: (newTitle: string) => void;
+  segment: Segment; 
+  segments: Segment[];
   activeSegmentId: string;
-  onUpdateSegments: (segments: Segment[]) => void; // Bulk update
-  onTextChange: (segmentId: string, newText: string) => void; // Specific updates (less used now)
-  onUpdateAudio: (segmentId: string, newAudioUrl: string | undefined, duration?: number) => void;
-  onUpdateWordTimings: (segmentId: string, timings: WordTiming[]) => void;
-  onAutoGenerateSubtitles: (segmentId?: string) => void;
-  onUpdateTextOverlayStyle: (segmentId: string, styleUpdate: Partial<TextOverlayStyle>) => void;
-  onUpdateDuration: (segmentId: string, newDuration: number) => void;
-  onUpdateTransition: (segmentId: string, transition: TransitionEffect) => void;
-  isLastSegment: boolean;
-  onOpenMediaSearch: (clipId: string | null) => void;
-  onRemoveMedia: (segmentId: string, clipId: string) => void;
-  onOpenVideoPreview: () => void;
-  onEditClipWithAI: (clipId: string) => void;
-  onReorderClips: (newMedia: MediaClip[]) => void;
+  onUpdateSegments: (segments: Segment[]) => void;
+  currentTime: number;
+  isPlaying: boolean;
+  totalDuration: number;
+  onPlayPause: () => void;
+  onSeek: (time: number) => void;
+  // ... pass-through props retained for compatibility but unused directly in this simplified view
+  [key: string]: any; 
 }
 
-const fonts = [
-    { name: 'Arial', value: 'Arial, sans-serif' },
-    { name: 'Georgia', value: 'Georgia, serif' },
-    { name: 'Impact', value: 'Impact, sans-serif' },
-    { name: 'Verdana', value: 'Verdana, sans-serif' },
-];
-
 const PreviewWindow: React.FC<PreviewWindowProps> = ({ 
-    segment, segments, activeSegmentId, onUpdateSegments,
-    onTextChange, onUpdateAudio, onUpdateWordTimings, onAutoGenerateSubtitles, 
-    onUpdateTextOverlayStyle, onUpdateDuration, onUpdateTransition, isLastSegment, 
-    onOpenMediaSearch, onRemoveMedia, onOpenVideoPreview, onEditClipWithAI, onReorderClips
+    title, onTitleChange, segments, currentTime, isPlaying, totalDuration, onPlayPause, onSeek
 }) => {
-    const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
-    const [generationProgress, setGenerationProgress] = useState('');
-    const [audioError, setAudioError] = useState('');
-    const audioPlayerRef = useRef<HTMLAudioElement>(null);
-    const [currentPlaybackTime, setCurrentPlaybackTime] = useState(0);
-    const [activeClipIndex, setActiveClipIndex] = useState(0);
-    const [draggedClipIndex, setDraggedClipIndex] = useState<number | null>(null);
-    
-    // Unified Script State
-    const [fullScript, setFullScript] = useState('');
-    
-    const style = segment.textOverlayStyle;
+    const audioRef = useRef<HTMLAudioElement>(null);
 
-    // Initialize full script from segments
+    const currentRenderState = useMemo(() => {
+        let elapsed = 0;
+        for (const seg of segments) {
+            if (currentTime >= elapsed && currentTime < elapsed + seg.duration) {
+                const localTime = currentTime - elapsed;
+                const clipDuration = seg.duration / seg.media.length;
+                const clipIndex = Math.min(seg.media.length - 1, Math.floor(localTime / clipDuration));
+                const activeClip = seg.media[clipIndex];
+                return { segment: seg, clip: activeClip, localTime, clipIndex };
+            }
+            elapsed += seg.duration;
+        }
+        return null;
+    }, [currentTime, segments]);
+
+    // Audio Sync
     useEffect(() => {
-        if (segments && segments.length > 0) {
-            const script = segments.map(s => s.narration_text).join('\n\n');
-            setFullScript(script);
-        }
-    }, [segments]);
-
-    // Sync active clip with playback time
-    useEffect(() => {
-        if (segment.media.length <= 1) {
-            setActiveClipIndex(0);
-            return;
-        }
-        
-        const clipDuration = segment.duration / segment.media.length;
-        const calculatedIndex = Math.min(
-            segment.media.length - 1, 
-            Math.floor(currentPlaybackTime / clipDuration)
-        );
-        
-        if (calculatedIndex !== activeClipIndex) {
-            setActiveClipIndex(calculatedIndex);
-        }
-    }, [currentPlaybackTime, segment.duration, segment.media.length]);
-
-    // Only use explicit word timings. Do not estimate on the fly for display.
-    const effectiveTimings = useMemo(() => {
-        if (segment.wordTimings && segment.wordTimings.length > 0) {
-            return segment.wordTimings;
-        }
-        return [];
-    }, [segment.wordTimings]);
-
-    // Memoize subtitle chunks calculation to avoid re-calc on every frame
-    const subtitleChunks = useMemo(() => {
-        if (!style || effectiveTimings.length === 0) return [];
-        return generateSubtitleChunks(
-            effectiveTimings, 
-            style.fontSize, 
-            style.maxCaptionLines || 2,
-            800 // Approx preview container width
-        );
-    }, [effectiveTimings, style?.fontSize, style?.maxCaptionLines]);
-
-    const handleScriptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        const newText = (e.target as any).value;
-        setFullScript(newText);
-        
-        const parts = newText.split(/\n\n+/); // Split by double newline
-        
-        const newSegments = [...segments];
-        const maxLen = Math.max(parts.length, newSegments.length);
-        const updatedSegments: Segment[] = [];
-        
-        for (let i = 0; i < maxLen; i++) {
-            if (i < parts.length) {
-                if (i < newSegments.length) {
-                    // Update existing
-                    if (newSegments[i].narration_text !== parts[i]) {
-                        updatedSegments.push({
-                            ...newSegments[i],
-                            narration_text: parts[i],
-                            audioUrl: undefined, // Invalidate audio on text change
-                            wordTimings: undefined
-                        });
-                    } else {
-                        updatedSegments.push(newSegments[i]);
-                    }
-                } else {
-                    // Create new segment
-                    const lastSeg = newSegments[newSegments.length - 1];
-                    updatedSegments.push({
-                        ...lastSeg,
-                        id: `segment-${Date.now()}-${i}`,
-                        narration_text: parts[i],
-                        audioUrl: undefined,
-                        wordTimings: undefined,
-                        media: lastSeg ? [...lastSeg.media] : [] 
-                    });
-                }
-            } else {
-                if (i < newSegments.length) {
-                     updatedSegments.push({
-                        ...newSegments[i],
-                        narration_text: '',
-                        audioUrl: undefined,
-                        wordTimings: undefined
-                     });
-                }
+        if (!audioRef.current) return;
+        const activeSeg = currentRenderState?.segment;
+        if (activeSeg?.audioUrl) {
+            if (!audioRef.current.src.includes(activeSeg.audioUrl)) {
+                 audioRef.current.src = activeSeg.audioUrl;
             }
-        }
-        
-        if (JSON.stringify(updatedSegments) !== JSON.stringify(segments)) {
-            onUpdateSegments(updatedSegments);
-        }
-    };
-
-    const handleStyleChange = (prop: keyof TextOverlayStyle, value: any) => {
-        onUpdateTextOverlayStyle(segment.id, { [prop]: value });
-    };
-    
-    const handleDurationChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        const val = Math.max(1, parseFloat((e.target as any).value));
-        onUpdateDuration(segment.id, val);
-    }
-    
-    const handleTransitionChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-        onUpdateTransition(segment.id, (e.target as any).value as TransitionEffect);
-    }
-
-    const handleGenerateCurrentAudio = async () => {
-        if (!segment.narration_text || segment.narration_text.trim().length === 0) return;
-        
-        setIsGeneratingAudio(true);
-        setGenerationProgress('Generating voice...');
-        setAudioError('');
-        
-        try {
-            const base64Audio = await generateSpeechFromText(segment.narration_text);
-            const wavBlobUrl = createWavBlobUrl(base64Audio);
-            
-            // Create temporary audio to get duration
-            const audio = new (window as any).Audio(wavBlobUrl);
-            await new Promise((resolve) => {
-                audio.onloadedmetadata = () => resolve(null);
-                audio.onerror = () => resolve(null); 
-            });
-            
-            const duration = audio.duration && isFinite(audio.duration) ? Math.ceil(audio.duration) : segment.duration;
-            const timings = estimateWordTimings(segment.narration_text, duration);
-            
-            onUpdateAudio(segment.id, wavBlobUrl, duration);
-            onUpdateWordTimings(segment.id, timings);
-            
-            // Update segment duration if audio is longer
-            if (duration > segment.duration) {
-                onUpdateDuration(segment.id, duration);
+            const expectedTime = currentRenderState?.localTime || 0;
+            if (Math.abs(audioRef.current.currentTime - expectedTime) > 0.3) {
+                audioRef.current.currentTime = expectedTime;
             }
-            
-        } catch (err) {
-            console.error('Failed to generate audio for current segment:', err);
-            setAudioError('Failed to generate audio.');
-        } finally {
-            setIsGeneratingAudio(false);
-            setGenerationProgress('');
+            if (isPlaying) audioRef.current.play().catch(() => {});
+            else audioRef.current.pause();
+            audioRef.current.volume = activeSeg.audioVolume ?? 1.0;
+        } else {
+            audioRef.current.pause();
+            audioRef.current.src = "";
         }
-    };
+    }, [currentRenderState?.segment.id, currentRenderState?.localTime, isPlaying]);
 
-    const handleGenerateAllAudio = async () => {
-        setIsGeneratingAudio(true);
-        setGenerationProgress('Initializing...');
-        setAudioError('');
-        
-        try {
-            const updatedSegments = [...segments];
-            let changed = false;
-            
-            for (let i = 0; i < updatedSegments.length; i++) {
-                const s = updatedSegments[i];
-                // Only generate if text exists
-                if (s.narration_text && s.narration_text.trim().length > 0) {
-                    setGenerationProgress(`Generating audio for segment ${i+1}/${updatedSegments.length}...`);
-                    
-                    // Add a small delay to avoid rate limits
-                    if (i > 0) await new Promise(r => setTimeout(r, 500));
-                    
-                    try {
-                        const base64Audio = await generateSpeechFromText(s.narration_text);
-                        const wavBlobUrl = createWavBlobUrl(base64Audio);
-                        
-                        // Create temporary audio to get duration
-                        const audio = new (window as any).Audio(wavBlobUrl);
-                        await new Promise((resolve) => {
-                            audio.onloadedmetadata = () => resolve(null);
-                            audio.onerror = () => resolve(null); // Fail safe
-                        });
-                        
-                        const duration = audio.duration && isFinite(audio.duration) ? Math.ceil(audio.duration) : s.duration;
-                        const timings = estimateWordTimings(s.narration_text, duration);
-                        
-                        updatedSegments[i] = {
-                            ...s,
-                            audioUrl: wavBlobUrl,
-                            duration: duration,
-                            wordTimings: timings
-                        };
-                        changed = true;
-                    } catch (err) {
-                        console.error(`Failed to generate audio for segment ${i}:`, err);
-                        // Continue to next segment even if one fails
-                    }
-                }
-            }
-            
-            if (changed) {
-                onUpdateSegments(updatedSegments);
-                setGenerationProgress('Done!');
-            }
-            
-        } catch (err) {
-            setAudioError('Batch generation encountered errors.');
-            console.error(err);
-        } finally {
-            setIsGeneratingAudio(false);
-            setTimeout(() => setGenerationProgress(''), 2000);
-        }
-    };
-
-    const handleRemoveAudio = () => {
-        onUpdateAudio(segment.id, undefined);
-        onUpdateWordTimings(segment.id, []); 
-    };
-    
-    const handleTimeUpdate = () => {
-        if (audioPlayerRef.current) {
-            setCurrentPlaybackTime((audioPlayerRef.current as any).currentTime);
-        }
-    };
-
-    // Clip Drag & Drop Handlers
-    const handleClipDragStart = (e: React.DragEvent<HTMLDivElement>, index: number) => {
-        setDraggedClipIndex(index);
-        (e.dataTransfer as any).effectAllowed = "move";
-        // Ghost image setting if needed
-    };
-
-    const handleClipDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-        e.preventDefault();
-        (e.dataTransfer as any).dropEffect = "move";
-    };
-
-    const handleClipDrop = (e: React.DragEvent<HTMLDivElement>, dropIndex: number) => {
-        e.preventDefault();
-        if (draggedClipIndex === null || draggedClipIndex === dropIndex) return;
-        
-        const newMedia = [...segment.media];
-        const [movedClip] = newMedia.splice(draggedClipIndex, 1);
-        newMedia.splice(dropIndex, 0, movedClip);
-        
-        onReorderClips(newMedia);
-        setDraggedClipIndex(null);
-        // Reset active clip to first to avoid confusion or out of bounds
-        setActiveClipIndex(0);
-    };
-
-    // Autoplay when new audio URL is set
-    useEffect(() => {
-        if (segment.audioUrl && audioPlayerRef.current && !isGeneratingAudio) {
-            (audioPlayerRef.current as any).load();
-            (audioPlayerRef.current as any).play().catch(() => {
-                // Auto-play rules might block this
-            });
-        }
-    }, [segment.audioUrl, isGeneratingAudio]);
-    
-    const getTextPositionClass = () => {
-        if (!style) return 'justify-end'; // Default to bottom
-        switch (style.position) {
-            case 'top': return 'justify-start';
-            case 'center': return 'justify-center';
-            case 'bottom': return 'justify-end';
-            default: return 'justify-end';
-        }
-    };
-
+    // Subtitle Rendering
     const renderKaraokeText = () => {
-        if (!style) return null;
+        const renderSeg = currentRenderState?.segment;
+        if (!renderSeg || !renderSeg.textOverlayStyle || !renderSeg.narration_text) return null;
         
-        // Strict condition: Audio must exist AND timings must be generated
-        if (!segment.audioUrl || effectiveTimings.length === 0) return null;
-        
-        const activeChunk = subtitleChunks.find(c => currentPlaybackTime >= c.start && currentPlaybackTime <= c.end);
-        const displayChunk = activeChunk || (currentPlaybackTime < 0.1 ? subtitleChunks[0] : null);
+        const timings = renderSeg.wordTimings;
+        if (!timings || timings.length === 0) return null;
 
-        if (!displayChunk) {
-             return null;
-        }
+        const currentStyle = renderSeg.textOverlayStyle;
+        const localTime = currentRenderState?.localTime || 0;
 
-        const animation = style.animation || 'none';
+        const subtitleChunks = generateSubtitleChunks(timings, currentStyle.fontSize, currentStyle.maxCaptionLines || 2, 800);
+        const displayChunk = subtitleChunks.find(c => localTime >= c.start && localTime <= c.end);
+
+        if (!displayChunk) return null;
 
         return (
             <p 
                 style={{
-                    fontFamily: style.fontFamily,
-                    fontSize: `${style.fontSize}px`,
-                    backgroundColor: style.backgroundColor,
+                    fontFamily: currentStyle.fontFamily,
+                    fontSize: `${currentStyle.fontSize}px`,
+                    backgroundColor: currentStyle.backgroundColor,
                     textShadow: '2px 2px 4px rgba(0,0,0,0.7)',
                     textAlign: 'center',
                     lineHeight: 1.4
                 }}
-                className="p-2 rounded-md"
+                className="p-2 rounded-md transition-all duration-100"
             >
                 {displayChunk.timings.map((t, i) => {
-                    const isActive = currentPlaybackTime >= t.start && currentPlaybackTime < t.end;
-                    const isPast = currentPlaybackTime >= t.end;
-                    
-                    let inlineStyle: React.CSSProperties = {
-                        display: 'inline-block',
-                        transition: 'all 0.1s ease-out',
-                        color: isActive || isPast ? style.color : '#FFFFFF',
-                        opacity: isActive || isPast ? 1 : 0.7,
-                        marginRight: '0.25em'
-                    };
-
-                    if (isActive) {
-                        if (animation === 'scale') {
-                            inlineStyle.transform = 'scale(1.2)';
-                        } else if (animation === 'slide-up') {
-                            inlineStyle.transform = 'translateY(-10%)';
-                        } else if (animation === 'highlight') {
-                             inlineStyle.backgroundColor = style.color;
-                             inlineStyle.color = '#000000';
-                             inlineStyle.borderRadius = '4px';
-                             inlineStyle.opacity = 1;
-                        }
-                    }
-
+                    const isActive = localTime >= t.start && localTime < t.end;
                     return (
-                        <span key={i} style={inlineStyle}>{t.word}</span>
+                        <span key={i} style={{ color: isActive ? currentStyle.color : '#FFFFFF', opacity: isActive ? 1 : 0.7, marginRight: '0.25em' }}>
+                            {t.word}
+                        </span>
                     );
                 })}
             </p>
         )
     }
 
-    const currentClip = segment.media[activeClipIndex] || segment.media[0];
-
-    // Safety check
-    if (!currentClip) return <div className="bg-gray-800 p-4">No Media Found</div>;
-
     return (
-        <div className="bg-gray-800 rounded-lg p-4 flex-grow flex flex-col md:flex-row gap-4 h-full min-h-[300px] md:min-h-0">
-            <div className="w-full md:w-2/3 flex flex-col gap-2">
-                {/* Main Preview Player */}
-                <div className="w-full aspect-video bg-black rounded-md overflow-hidden relative group shadow-lg border border-gray-700">
-                    {currentClip.type === 'video' ? (
-                        <video 
-                            key={currentClip.url}
-                            src={currentClip.url} 
-                            className="w-full h-full object-cover"
-                            controls={false}
-                            autoPlay
-                            loop
-                            muted 
-                            playsInline
-                        />
-                    ) : (
-                        <img 
-                            key={currentClip.url}
-                            src={currentClip.url} 
-                            alt={segment.search_keywords_for_media} 
-                            className="w-full h-full object-cover"
-                        />
-                    )}
-                    {/* Text Overlay */}
-                    {style && (
-                        <div className={`absolute inset-0 p-4 flex flex-col pointer-events-none ${getTextPositionClass()}`}>
+        <div className="flex flex-col h-full w-full bg-[#0a0a0a] relative">
+            {/* Title Overlay */}
+            <div className="absolute top-0 left-0 w-full p-2 z-20 flex justify-center opacity-0 hover:opacity-100 transition-opacity">
+                <input 
+                    value={title} 
+                    onChange={e => onTitleChange(e.target.value)} 
+                    className="bg-transparent text-center text-gray-500 text-sm focus:text-white outline-none"
+                />
+            </div>
+
+            {/* Video Stage */}
+            <div className="flex-grow flex items-center justify-center relative overflow-hidden group">
+                {currentRenderState ? (
+                    <div className="relative aspect-[9/16] md:aspect-video h-full max-h-full bg-black shadow-lg">
+                        {currentRenderState.clip.type === 'video' ? (
+                            <video key={currentRenderState.clip.url} src={currentRenderState.clip.url} className="w-full h-full object-contain" autoPlay muted loop playsInline />
+                        ) : (
+                            <img src={currentRenderState.clip.url} className="w-full h-full object-contain" />
+                        )}
+                        <div className={`absolute inset-0 p-8 flex flex-col justify-end items-center pointer-events-none`}>
                             {renderKaraokeText()}
                         </div>
-                    )}
-                    {/* Hover controls overlay */}
-                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center gap-4 pointer-events-none">
-                        <button 
-                            onClick={onOpenVideoPreview}
-                            className="px-6 py-3 bg-purple-600/80 backdrop-blur-sm text-white font-semibold rounded-md hover:bg-purple-700/80 flex items-center gap-2 pointer-events-auto"
-                            title="Preview Full Video"
-                        >
-                            <PlayIcon className="w-5 h-5" />
-                            Preview All
-                        </button>
                     </div>
-                </div>
-
-                {/* Media Clip Sequence Strip */}
-                <div className="relative">
-                    <h3 className="text-[10px] text-gray-500 uppercase tracking-wider mb-1">Clip Sequence (Drag to Reorder)</h3>
-                    <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar min-h-[70px]">
-                        {segment.media.map((clip, index) => {
-                            const isDragging = draggedClipIndex === index;
-                            const isCurrent = index === activeClipIndex;
-                            return (
-                                <div 
-                                    key={clip.id}
-                                    draggable
-                                    onDragStart={(e) => handleClipDragStart(e, index)}
-                                    onDragOver={handleClipDragOver}
-                                    onDrop={(e) => handleClipDrop(e, index)}
-                                    className={`relative flex-shrink-0 w-24 aspect-video rounded-md overflow-hidden cursor-pointer border-2 transition-all ${isCurrent ? 'border-purple-500' : 'border-gray-700 hover:border-gray-500'} ${isDragging ? 'opacity-30' : 'opacity-100'}`}
-                                    onClick={() => setActiveClipIndex(index)}
-                                >
-                                    {clip.type === 'video' ? (
-                                        <video src={clip.url} className="w-full h-full object-cover pointer-events-none" />
-                                    ) : (
-                                        <img src={clip.url} className="w-full h-full object-cover pointer-events-none" />
-                                    )}
-                                    
-                                    {/* Clip Tools overlay */}
-                                    <div className="absolute inset-0 bg-black/60 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                                         <button 
-                                            onClick={(e) => { e.stopPropagation(); onEditClipWithAI(clip.id); }}
-                                            className="p-1 bg-purple-600 rounded-full hover:bg-purple-500"
-                                            title="Edit with AI"
-                                         >
-                                            <MagicWandIcon className="w-3 h-3 text-white" />
-                                         </button>
-                                         <button 
-                                            onClick={(e) => { e.stopPropagation(); onOpenMediaSearch(clip.id); }}
-                                            className="p-1 bg-blue-600 rounded-full hover:bg-blue-500"
-                                            title="Replace Media"
-                                         >
-                                            <EditIcon className="w-3 h-3 text-white" />
-                                         </button>
-                                          {segment.media.length > 1 && (
-                                            <button 
-                                                onClick={(e) => { e.stopPropagation(); onRemoveMedia(segment.id, clip.id); }}
-                                                className="p-1 bg-red-600 rounded-full hover:bg-red-500"
-                                                title="Remove Clip"
-                                            >
-                                                <TrashIcon className="w-3 h-3 text-white" />
-                                            </button>
-                                          )}
-                                    </div>
-                                    <div className="absolute bottom-0 right-0 bg-black/70 px-1 text-[8px] text-white">
-                                        {index + 1}
-                                    </div>
-                                </div>
-                            )
-                        })}
-                        {/* Add Clip Button */}
-                        <button 
-                            onClick={() => onOpenMediaSearch(null)}
-                            className="flex-shrink-0 w-24 aspect-video bg-gray-800 border-2 border-dashed border-gray-600 rounded-md flex flex-col items-center justify-center hover:bg-gray-700 hover:border-purple-500 transition-colors gap-1 group"
-                        >
-                            <span className="text-2xl text-gray-400 group-hover:text-purple-400">+</span>
-                            <span className="text-[10px] text-gray-500 group-hover:text-purple-300">Add Clip</span>
-                        </button>
-                    </div>
-                </div>
-                
-                {/* Unified Script Textbox */}
-                <div className="mt-1 relative group flex-grow flex flex-col">
-                     <div className="flex justify-between items-center mb-1">
-                         <h3 className="text-xs font-bold text-blue-400 uppercase tracking-wider">Full Video Script (All Segments)</h3>
-                         <span className="text-[10px] text-gray-500">Separate segments with blank lines</span>
-                     </div>
-                    <div className="relative bg-gray-800 rounded-lg p-1 border border-gray-700 focus-within:border-blue-500 transition-colors flex-grow">
-                         <textarea
-                            value={fullScript}
-                            onChange={handleScriptChange}
-                            className="w-full h-full min-h-[100px] p-3 bg-transparent border-none resize-none focus:ring-0 text-white placeholder-gray-500 text-lg leading-relaxed"
-                            placeholder="Enter narration text here. Use double newlines to separate segments..."
-                        />
-                    </div>
-                </div>
-            </div>
-
-            {/* Right Sidebar (Settings) */}
-            <div className="w-full md:w-1/3 flex flex-col justify-between overflow-y-auto pr-2">
-                
-                {/* Duration Control */}
-                <div className="mb-4 bg-gray-700/30 p-3 rounded-lg border border-gray-700">
-                     <div className="flex justify-between items-center">
-                        <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Duration (s)</label>
-                        <input 
-                            type="number" 
-                            min="1" 
-                            step="0.1" 
-                            value={segment.duration} 
-                            onChange={handleDurationChange}
-                            className="w-20 p-1.5 bg-gray-800 border border-gray-600 rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none text-right"
-                        />
-                     </div>
-                </div>
-
-                {/* Transition Control */}
-                <div className="mb-4 bg-gray-700/30 p-3 rounded-lg border border-gray-700">
-                     <div className="flex justify-between items-center">
-                        <label className="text-xs text-gray-400 uppercase font-bold tracking-wider">Transition to next</label>
-                     </div>
-                     {isLastSegment ? (
-                         <div className="text-xs text-gray-500 italic mt-1">None (End of video)</div>
-                     ) : (
-                         <select 
-                            value={segment.transition || 'fade'}
-                            onChange={handleTransitionChange}
-                            className="w-full mt-1 p-2 bg-gray-800 border border-gray-600 rounded text-sm focus:ring-2 focus:ring-purple-500 outline-none"
-                        >
-                            <option value="fade">Fade</option>
-                            <option value="slide">Slide</option>
-                            <option value="zoom">Zoom</option>
-                        </select>
-                     )}
-                </div>
-                
-                 {/* Text Style Controls */}
-                {style && (
-                    <div className="space-y-3 mb-4">
-                        <div className="flex items-center justify-between border-b border-gray-700 pb-2">
-                            <h4 className="text-sm font-semibold text-purple-300 uppercase tracking-wide">Text Overlay</h4>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                            <div>
-                                <label className="text-xs text-gray-400 block mb-1">Font</label>
-                                <select value={style.fontFamily} onChange={(e) => handleStyleChange('fontFamily', (e.target as any).value)} className="w-full p-1.5 bg-gray-700 border border-gray-600 rounded text-sm">
-                                    {fonts.map(f => <option key={f.name} value={f.value}>{f.name}</option>)}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="text-xs text-gray-400 block mb-1">Size</label>
-                                <input type="number" value={style.fontSize} onChange={(e) => handleStyleChange('fontSize', parseInt((e.target as any).value))} className="w-full p-1.5 bg-gray-700 border border-gray-600 rounded text-sm" />
-                            </div>
-                            <div className="col-span-2">
-                                <label className="text-xs text-gray-400 block mb-1">Highlight Color</label>
-                                <div className="flex items-center gap-2 bg-gray-700 p-1 rounded border border-gray-600">
-                                    <input type="color" value={style.color} onChange={(e) => handleStyleChange('color', (e.target as any).value)} className="w-6 h-6 p-0 border-none rounded cursor-pointer bg-transparent" />
-                                    <span className="text-xs text-gray-300">{style.color}</span>
-                                </div>
-                            </div>
-                            <div>
-                                <label className="text-xs text-gray-400 block mb-1">Lines</label>
-                                <input 
-                                    type="number" 
-                                    min="1" 
-                                    max="4" 
-                                    value={style.maxCaptionLines || 2} 
-                                    onChange={(e) => handleStyleChange('maxCaptionLines', parseInt((e.target as any).value))} 
-                                    className="w-full p-1.5 bg-gray-700 border border-gray-600 rounded text-sm" 
-                                />
-                            </div>
-                            <div>
-                                <label className="text-xs text-gray-400 block mb-1">Animation</label>
-                                <select 
-                                    value={style.animation || 'none'} 
-                                    onChange={(e) => handleStyleChange('animation', (e.target as any).value)} 
-                                    className="w-full p-1.5 bg-gray-700 border border-gray-600 rounded text-sm"
-                                >
-                                    <option value="none">None</option>
-                                    <option value="scale">Scale</option>
-                                    <option value="slide-up">Slide Up</option>
-                                    <option value="highlight">Highlight</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
+                ) : (
+                    <div className="text-gray-700 font-mono">NO SIGNAL</div>
                 )}
 
-
-                <div className="mt-auto bg-gray-800 border-t border-gray-700 pt-4">
-                    {/* Hidden Audio element to maintain logic loop for karaoke sync */}
-                    {segment.audioUrl && (
-                         <audio 
-                            ref={audioPlayerRef} 
-                            onTimeUpdate={handleTimeUpdate}
-                            src={segment.audioUrl} 
-                            className="hidden" 
-                        />
-                    )}
-                    
-                    {/* Generation Status */}
-                    {isGeneratingAudio && (
-                        <div className="mb-2 text-xs text-purple-300 animate-pulse">
-                            {generationProgress}
-                        </div>
-                    )}
-                    
-                    <div className="flex gap-2 flex-col">
-                        <button 
-                            onClick={handleGenerateCurrentAudio}
-                            disabled={isGeneratingAudio || !segment.narration_text}
-                            className="w-full px-3 py-3 bg-indigo-600 text-white text-sm font-semibold rounded hover:bg-indigo-700 disabled:bg-gray-600 flex items-center justify-center gap-2 transition-colors shadow-lg"
-                        >
-                             {isGeneratingAudio && generationProgress.includes('voice') ? <LoadingSpinner /> : <MusicIcon className="w-4 h-4" />}
-                             Generate Voice for This Segment
-                        </button>
-
-                        <button 
-                            onClick={handleGenerateAllAudio} 
-                            disabled={isGeneratingAudio}
-                            className="w-full px-3 py-3 bg-purple-600 text-white text-sm font-semibold rounded hover:bg-purple-700 disabled:bg-gray-600 flex items-center justify-center gap-2 transition-colors shadow-lg"
-                        >
-                            {isGeneratingAudio && !generationProgress.includes('voice') ? <LoadingSpinner /> : <MusicIcon className="w-4 h-4" />}
-                            Generate Voice for ALL Segments
-                        </button>
-                        
-                        {segment.audioUrl && (
-                            <button 
-                                onClick={handleRemoveAudio}
-                                className="w-full px-3 py-2 bg-red-900/30 text-red-300 border border-red-900/50 text-xs font-semibold rounded hover:bg-red-900/50"
-                                title="Remove Audio from this segment"
-                            >
-                                Remove Current Audio
-                            </button>
-                        )}
-                    </div>
-                    {audioError && <p className="text-xs text-red-400 mt-1">{audioError}</p>}
+                {/* Floating Controls */}
+                <div className="absolute bottom-10 left-1/2 -translate-x-1/2 flex items-center gap-6 opacity-0 group-hover:opacity-100 transition-all duration-300 bg-black/50 px-6 py-2 rounded-full backdrop-blur-sm">
+                    <button onClick={() => onSeek(Math.max(0, currentTime - 5))} className="text-white hover:scale-110"><ChevronLeftIcon /></button>
+                    <button onClick={onPlayPause} className="text-white hover:scale-110">
+                        {isPlaying ? <PauseIcon className="w-8 h-8" /> : <PlayIcon className="w-8 h-8" />}
+                    </button>
+                    <button onClick={() => onSeek(Math.min(totalDuration, currentTime + 5))} className="text-white hover:scale-110"><ChevronRightIcon /></button>
                 </div>
             </div>
+
+            {/* Hidden Audio */}
+            <audio ref={audioRef} className="hidden" />
         </div>
     );
 };
