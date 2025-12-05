@@ -1,6 +1,8 @@
+
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import type { VideoScript, Segment, TransitionEffect, AudioClip } from '../types';
-import { searchPixabayImages, searchPixabayVideos, searchPixabayAudio } from "./pixabayService";
+import { searchPixabayAudio } from "./pixabayService";
+import { searchPexelsPhotos, searchPexelsVideos } from "./pexelsService";
 
 // Helper to clean JSON string from Markdown code blocks often returned by LLMs
 function cleanJsonText(text: string): string {
@@ -104,7 +106,7 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
         throw new Error("Failed to parse AI response. The model generated invalid JSON.");
     }
 
-    // Fetch initial media for all segments from Pixabay
+    // Fetch initial media for all segments from Pexels (Updated from Pixabay)
     const segmentsWithMediaPromises = parsedResponse.segments.map(async (segment, index) => {
         // Use the full descriptive phrase for better search results
         const keyword = segment.search_keywords_for_media.trim();
@@ -114,12 +116,12 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
         let mediaType: 'image' | 'video' = 'image';
         
         try {
-            // Try fetching video first to prioritize dynamic content
+            // Try fetching video first to prioritize dynamic content from Pexels
             // Pass the aspect ratio here
-            const videoResults = await searchPixabayVideos(keyword, aspectRatio);
+            const videoResults = await searchPexelsVideos(keyword, aspectRatio);
             if (videoResults && videoResults.length > 0) {
                 const video = videoResults[0];
-                // Try to find HD quality, fallback to first available
+                // Pexels mapping from service returns normalized structure
                 const bestVideoFile = video.video_files.find((f: any) => f.quality === 'hd') || video.video_files[0];
                 if (bestVideoFile) {
                     mediaUrl = bestVideoFile.link;
@@ -127,16 +129,16 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
                 }
             }
 
-            // If no video found, fallback to photo
+            // If no video found, fallback to photo from Pexels
             if (mediaType !== 'video') {
-                const photoResults = await searchPixabayImages(keyword, aspectRatio);
+                const photoResults = await searchPexelsPhotos(keyword, aspectRatio);
                 if (photoResults && photoResults.length > 0) {
                     mediaUrl = photoResults[0].src.large2x;
                     mediaType = 'image';
                 }
             }
         } catch (e) {
-            console.warn("Failed to fetch initial media from Pixabay, using placeholder.", e)
+            console.warn("Failed to fetch initial media from Pexels, using placeholder.", e)
         }
         
         const transitions: TransitionEffect[] = ['fade', 'slide', 'zoom'];
@@ -170,7 +172,7 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
     // --- Auto-Generate Global Audio Tracks (Music & SFX) ---
     const audioTracks: AudioClip[] = [];
     
-    // 1. Background Music
+    // 1. Background Music (Pixabay is still used for Audio)
     try {
         if (parsedResponse.background_music_keywords) {
             const musicResults = await searchPixabayAudio(parsedResponse.background_music_keywords, 'music');
@@ -194,7 +196,7 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
         console.warn("Failed to auto-generate background music:", e);
     }
 
-    // 2. Sound Effects
+    // 2. Sound Effects (Pixabay)
     try {
         let currentTimelineOffset = 0;
         // Fetch SFX for segments sequentially to avoid rate limiting or just map concurrently
@@ -254,7 +256,7 @@ export async function suggestMediaKeywords(narrationText: string, videoContext?:
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `Based on the following narration text for a video segment, suggest 5 to 7 visually descriptive search phrases for stock footage (Pixabay). 
+      contents: `Based on the following narration text for a video segment, suggest 5 to 7 visually descriptive search phrases for stock footage (Pexels). 
       ${contextPrompt}
       
       Rules:
