@@ -14,6 +14,7 @@ interface ExportModalProps {
 }
 
 type ExportStatus = 'idle' | 'preparing' | 'sending' | 'rendering' | 'complete' | 'error';
+type ExportQuality = '360p' | '720p' | '1080p';
 
 // Default from env, but can be overridden by user in UI
 const DEFAULT_BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
@@ -23,6 +24,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
     const [statusText, setStatusText] = useState('');
     const [videoUrl, setVideoUrl] = useState<string | null>(null);
     const [error, setError] = useState('');
+    const [quality, setQuality] = useState<ExportQuality>('720p');
     
     // Allow user to edit the URL if connection fails
     const [currentBackendUrl, setCurrentBackendUrl] = useState(DEFAULT_BACKEND_URL);
@@ -91,11 +93,20 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
             }
         }
 
+        let width = 1280;
+        let height = 720;
+
+        switch (quality) {
+            case '360p': width = 640; height = 360; break;
+            case '720p': width = 1280; height = 720; break;
+            case '1080p': width = 1920; height = 1080; break;
+        }
+
         return {
             title,
             segments: processedSegments,
             audioTracks: processedAudioTracks,
-            resolution: { width: 1280, height: 720 }
+            resolution: { width, height }
         };
     };
 
@@ -238,17 +249,36 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                 </div>
 
                 {status === 'idle' && (
-                    <div className="text-center space-y-4">
+                    <div className="space-y-4">
+                         
+                         {/* Quality Selector */}
+                         <div className="bg-gray-700/50 p-4 rounded-md border border-gray-600">
+                             <label className="text-xs text-gray-400 font-bold block mb-2 uppercase">Video Quality</label>
+                             <div className="flex gap-2">
+                                {(['360p', '720p', '1080p'] as ExportQuality[]).map(q => (
+                                    <button
+                                        key={q}
+                                        onClick={() => setQuality(q)}
+                                        className={`flex-1 py-2 rounded text-sm font-bold border transition-all ${quality === q 
+                                            ? 'bg-purple-600 border-purple-500 text-white shadow-lg shadow-purple-900/50' 
+                                            : 'bg-gray-800 border-gray-600 text-gray-400 hover:bg-gray-700 hover:text-white'}`}
+                                    >
+                                        {q === '360p' ? '360p (Draft)' : q === '720p' ? '720p (HD)' : '1080p (FHD)'}
+                                    </button>
+                                ))}
+                             </div>
+                         </div>
+
                          <div className="bg-purple-900/20 border border-purple-500/30 p-4 rounded-md text-left">
-                            <p className="text-gray-200 mb-2">
+                            <p className="text-gray-200 mb-2 text-sm">
                                 Rendering will be performed on the <b>Cloud Server</b>.
                             </p>
-                            <label className="text-xs text-gray-400 font-bold block mb-1">Render Server URL</label>
+                            <label className="text-[10px] text-gray-400 font-bold block mb-1 uppercase">Render Server URL</label>
                             <input 
                                 type="text" 
                                 value={currentBackendUrl}
                                 onChange={(e) => setCurrentBackendUrl(e.target.value)}
-                                className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-sm text-gray-300 focus:border-purple-500 outline-none"
+                                className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-xs text-gray-300 focus:border-purple-500 outline-none"
                                 placeholder="https://your-project.up.railway.app"
                             />
                         </div>
@@ -275,7 +305,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                         <p className="text-xl font-semibold text-green-400 mb-4">Render Complete!</p>
                         <video src={videoUrl} controls className="w-full rounded-md mb-4 max-h-64 bg-black shadow-lg"></video>
                         <div className="flex gap-2">
-                            <a href={videoUrl} download={`${title.replace(/[^a-z0-9]/gi, '_')}.mp4`} className="flex-1 py-3 bg-green-600 hover:bg-green-700 rounded-md text-white font-semibold flex items-center justify-center gap-2 transition-colors">
+                            <a href={videoUrl} download={`${title.replace(/[^a-z0-9]/gi, '_')}_${quality}.mp4`} className="flex-1 py-3 bg-green-600 hover:bg-green-700 rounded-md text-white font-semibold flex items-center justify-center gap-2 transition-colors">
                                 <DownloadIcon /> Download MP4
                             </a>
                             <button onClick={handleClose} className="px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded-md text-gray-200">

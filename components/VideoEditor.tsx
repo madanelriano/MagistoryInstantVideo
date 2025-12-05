@@ -1,6 +1,5 @@
-
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import type { VideoScript, Segment, TransitionEffect, TextOverlayStyle, WordTiming, MediaClip, AudioClip } from '../types';
+import type { VideoScript, Segment, TransitionEffect, TextOverlayStyle, WordTiming, MediaClip, AudioClip, AIToolTab } from '../types';
 import PreviewWindow from './PreviewWindow';
 import Timeline from './Timeline';
 import ResourcePanel from './ResourcePanel';
@@ -49,6 +48,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   const [timelineZoom, setTimelineZoom] = useState(1);
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isAIToolsOpen, setIsAIToolsOpen] = useState(false);
+  const [aiToolsInitialTab, setAiToolsInitialTab] = useState<AIToolTab>('edit-image');
 
   // Calculate total duration
   const totalDuration = segments.reduce((acc, s) => acc + s.duration, 0);
@@ -363,6 +363,11 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
       setIsResourcePanelOpen(true);
     }
   };
+  
+  const handleOpenAITools = useCallback((tab: AIToolTab = 'edit-image') => {
+      setAiToolsInitialTab(tab);
+      setIsAIToolsOpen(true);
+  }, []);
 
 
   return (
@@ -468,8 +473,12 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                             onSelectMedia={handleResourceSelectMedia}
                             onSelectAudio={handleResourceSelectAudio}
                             onAddText={handleResourceAddText}
-                            onOpenAITools={() => setIsAIToolsOpen(true)}
+                            onUpdateSegmentText={handleUpdateSegmentText}
+                            onOpenAITools={handleOpenAITools}
                             onAutoCaptions={handleAutoCaptions}
+                            segments={segments}
+                            activeSegmentId={activeSegmentId}
+                            onSelectSegment={handleSelectSegment}
                         />
                     </div>
                 )}
@@ -487,7 +496,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                     onUpdateStyle={handleUpdateSegmentTextOverlayStyle}
                     onUpdateTransition={handleUpdateSegmentTransition}
                     onDelete={handleDeleteSegment}
-                    onOpenAITools={() => setIsAIToolsOpen(true)}
+                    onOpenAITools={() => handleOpenAITools()}
                  />
              </div>
              
@@ -560,6 +569,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                 activeClipId={activeSegment.media[0].id}
                 onUpdateMedia={(newUrl) => handleResourceSelectMedia(newUrl, 'image')}
                 onUpdateAudio={(newUrl, duration) => handleUpdateSegmentAudio(activeSegment.id, newUrl, duration)}
+                initialTab={aiToolsInitialTab}
             />
         )}
 

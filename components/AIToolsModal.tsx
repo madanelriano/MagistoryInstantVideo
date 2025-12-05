@@ -1,16 +1,22 @@
 
 
+
+
+
 import React, { useState, useEffect, useRef } from 'react';
-import type { Segment } from '../types';
+import type { Segment, AIToolTab } from '../types';
 import LoadingSpinner from './LoadingSpinner';
 import { 
     generateImageFromPrompt,
     editImageFromPrompt,
     generateVideoFromPrompt,
     getVideosOperation,
-    generateSpeechFromText
+    generateSpeechFromText,
+    generateSFXKeywords
 } from '../services/geminiService';
+import { searchPixabayAudio } from '../services/pixabayService';
 import { imageUrlToBase64, createWavBlobUrl, getAudioDuration } from '../utils/media';
+import { VolumeXIcon } from './icons';
 
 interface AIToolsModalProps {
   isOpen: boolean;
@@ -19,12 +25,18 @@ interface AIToolsModalProps {
   activeClipId: string; // The ID of the clip we are modifying
   onUpdateMedia: (newUrl: string) => void; // This callback in parent will handle updating specific clip
   onUpdateAudio: (newUrl: string, duration?: number) => void;
+  initialTab?: AIToolTab;
 }
 
-type Tab = 'generate-image' | 'edit-image' | 'generate-video' | 'tts';
+const AIToolsModal: React.FC<AIToolsModalProps> = ({ isOpen, onClose, segment, activeClipId, onUpdateMedia, onUpdateAudio, initialTab = 'edit-image' }) => {
+  const [activeTab, setActiveTab] = useState<AIToolTab>(initialTab);
 
-const AIToolsModal: React.FC<AIToolsModalProps> = ({ isOpen, onClose, segment, activeClipId, onUpdateMedia, onUpdateAudio }) => {
-  const [activeTab, setActiveTab] = useState<Tab>('edit-image');
+  // Reset tab when modal opens/closes or initialTab changes
+  useEffect(() => {
+    if (isOpen) {
+        setActiveTab(initialTab);
+    }
+  }, [isOpen, initialTab]);
 
   // Find the active clip object
   const activeClip = segment.media.find(c => c.id === activeClipId) || segment.media[0];
@@ -40,11 +52,12 @@ const AIToolsModal: React.FC<AIToolsModalProps> = ({ isOpen, onClose, segment, a
         </div>
         
         <div className="border-b border-gray-700 mb-4">
-          <nav className="flex gap-4">
+          <nav className="flex gap-4 overflow-x-auto custom-scrollbar pb-2">
             <TabButton name="Edit/Enhance Image" tab="edit-image" activeTab={activeTab} setActiveTab={setActiveTab} />
             <TabButton name="Generate Image" tab="generate-image" activeTab={activeTab} setActiveTab={setActiveTab} />
             <TabButton name="Generate Video" tab="generate-video" activeTab={activeTab} setActiveTab={setActiveTab} />
             <TabButton name="Text to Speech" tab="tts" activeTab={activeTab} setActiveTab={setActiveTab} />
+            <TabButton name="Generate SFX" tab="generate-sfx" activeTab={activeTab} setActiveTab={setActiveTab} />
           </nav>
         </div>
 
@@ -53,6 +66,7 @@ const AIToolsModal: React.FC<AIToolsModalProps> = ({ isOpen, onClose, segment, a
           {activeTab === 'edit-image' && <EditImageTab mediaUrl={activeClip.url} onUpdateMedia={onUpdateMedia} onClose={onClose} />}
           {activeTab === 'generate-video' && <GenerateVideoTab segment={segment} onUpdateMedia={onUpdateMedia} onClose={onClose} />}
           {activeTab === 'tts' && <TextToSpeechTab segment={segment} onUpdateAudio={onUpdateAudio} />}
+          {activeTab === 'generate-sfx' && <GenerateSFXTab segment={segment} onUpdateAudio={onUpdateAudio} onClose={onClose} />}
         </div>
       </div>
     </div>
@@ -60,10 +74,10 @@ const AIToolsModal: React.FC<AIToolsModalProps> = ({ isOpen, onClose, segment, a
 };
 
 
-const TabButton: React.FC<{name: string, tab: Tab, activeTab: Tab, setActiveTab: (tab: Tab) => void}> = ({ name, tab, activeTab, setActiveTab }) => (
+const TabButton: React.FC<{name: string, tab: AIToolTab, activeTab: AIToolTab, setActiveTab: (tab: AIToolTab) => void}> = ({ name, tab, activeTab, setActiveTab }) => (
     <button
       onClick={() => setActiveTab(tab)}
-      className={`px-4 py-2 font-semibold border-b-2 transition-colors ${activeTab === tab ? 'text-purple-400 border-purple-400' : 'text-gray-400 border-transparent hover:text-white hover:border-gray-500'}`}
+      className={`px-4 py-2 font-semibold border-b-2 transition-colors whitespace-nowrap ${activeTab === tab ? 'text-purple-400 border-purple-400' : 'text-gray-400 border-transparent hover:text-white hover:border-gray-500'}`}
     >
       {name}
     </button>
@@ -411,6 +425,118 @@ const TextToSpeechTab: React.FC<{ segment: Segment; onUpdateAudio: (url: string,
                     <audio src={audioSrc} controls className="w-full"></audio>
                 </div>
             )}
+        </div>
+    );
+};
+
+// --- Generate SFX Tab ---
+const GenerateSFXTab: React.FC<{ segment: Segment; onUpdateAudio: (url: string, duration?: number) => void; onClose: () => void; }> = ({ segment, onUpdateAudio, onClose }) => {
+    const [prompt, setPrompt] = useState(segment.narration_text || '');
+    const [isLoading, setIsLoading] = useState(false);
+    const [results, setResults] = useState<any[]>([]);
+    const [error, setError] = useState('');
+    const [generatedKeywords, setGeneratedKeywords] = useState('');
+
+    const handleGenerate = async () => {
+        if (!prompt) return;
+        setIsLoading(true);
+        setError('');
+        setResults([]);
+        setGeneratedKeywords('');
+
+        try {
+            // 1. Use Gemini to find the best keywords
+            const keywords = await generateSFXKeywords(prompt);
+            setGeneratedKeywords(keywords);
+
+            // 2. Use those keywords to find sound effects
+            const sfxResults = await searchPixabayAudio(keywords, 'sfx');
+            
+            if (sfxResults.length === 0) {
+                // Fallback search with original prompt if complex query failed
+                const fallback = await searchPixabayAudio(prompt, 'sfx');
+                setResults(fallback);
+                if (fallback.length === 0) setError("No sound effects found matching your description.");
+            } else {
+                setResults(sfxResults);
+            }
+
+        } catch (err) {
+            setError('Failed to generate sound effects. Please try again.');
+            console.error(err);
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleSelect = async (url: string) => {
+        // Calculate duration and update
+        const duration = await getAudioDuration(url);
+        onUpdateAudio(url, duration);
+        onClose();
+    }
+
+    return (
+        <div>
+            <p className="text-gray-300 mb-4">Describe a sound effect (e.g., "footsteps in a hallway", "laser blast") and AI will find the perfect match.</p>
+            
+            <div className="flex gap-2 mb-4">
+                <input 
+                    type="text" 
+                    value={prompt} 
+                    onChange={e => setPrompt((e.target as any).value)} 
+                    placeholder="e.g., Explosion with debris" 
+                    className="flex-grow p-3 bg-gray-700 border border-gray-600 rounded-md focus:ring-2 focus:ring-purple-500 outline-none text-white" 
+                />
+                <button 
+                    onClick={handleGenerate} 
+                    disabled={isLoading || !prompt} 
+                    className="px-6 py-2 bg-orange-600 text-white font-semibold rounded-md hover:bg-orange-700 disabled:bg-gray-600 flex items-center gap-2"
+                >
+                    {isLoading && <LoadingSpinner />} Generate
+                </button>
+            </div>
+
+            {generatedKeywords && !isLoading && (
+                <div className="mb-4 text-xs text-gray-400">
+                    <span className="font-bold text-orange-400">AI Generated Search Terms:</span> {generatedKeywords}
+                </div>
+            )}
+
+            {error && <p className="text-red-400 text-center mb-2">{error}</p>}
+
+            <div className="grid gap-2 max-h-[400px] overflow-y-auto custom-scrollbar">
+                {results.map((item, i) => (
+                  <div 
+                    key={i} 
+                    className="bg-[#252525] p-3 rounded flex items-center justify-between group hover:bg-[#2a2a2a] border border-transparent hover:border-gray-600 transition-all"
+                  >
+                    <div className="flex items-center gap-3 overflow-hidden">
+                        <div className="w-8 h-8 rounded-full flex items-center justify-center text-white flex-shrink-0 bg-orange-700">
+                             <VolumeXIcon className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                            <p className="text-xs text-gray-200 truncate font-medium max-w-[200px]">{item.name}</p>
+                            <p className="text-[9px] text-gray-500">{Math.floor(item.duration/60)}:{(item.duration%60).toString().padStart(2,'0')}</p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <audio src={item.url} controls className="h-6 w-24 opacity-50 hover:opacity-100" />
+                        <button 
+                            className="bg-purple-600 hover:bg-purple-500 text-white text-xs px-3 py-1.5 rounded shadow-sm font-bold"
+                            onClick={() => handleSelect(item.url)}
+                        >
+                            Use
+                        </button>
+                    </div>
+                  </div>
+                ))}
+                {results.length === 0 && !isLoading && !error && (
+                    <div className="text-center text-gray-600 py-10 border border-dashed border-gray-700 rounded-lg">
+                        Enter a prompt to start generating SFX.
+                    </div>
+                )}
+            </div>
         </div>
     );
 };

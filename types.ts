@@ -2,6 +2,7 @@
 
 export type TransitionEffect = 'fade' | 'slide' | 'zoom';
 export type TextAnimation = 'none' | 'scale' | 'slide-up' | 'highlight';
+export type AIToolTab = 'generate-image' | 'edit-image' | 'generate-video' | 'tts' | 'generate-sfx';
 
 export interface TextOverlayStyle {
   fontFamily: string;

@@ -1,23 +1,32 @@
 
+
+
+
+
 import React, { useState, useEffect, useRef } from 'react';
 import { searchPixabayAudio } from '../services/pixabayService';
 import { searchPexelsPhotos, searchPexelsVideos } from '../services/pexelsService';
-import { MagicWandIcon, PlayIcon, MusicIcon, TextIcon, SearchIcon, ExportIcon, VolumeXIcon } from './icons';
+import { MagicWandIcon, PlayIcon, MusicIcon, TextIcon, SearchIcon, ExportIcon, VolumeXIcon, EditIcon, MediaIcon, EffectsIcon } from './icons';
 import LoadingSpinner from './LoadingSpinner';
 import { getCachedMediaUrl } from '../utils/cache';
+import type { Segment, AIToolTab } from '../types';
 
 interface ResourcePanelProps {
   activeTab: string;
   onSelectMedia: (url: string, type: 'image' | 'video') => void;
   onSelectAudio: (url: string, name: string, type?: 'music' | 'sfx') => void;
   onAddText: (text: string) => void;
-  onOpenAITools: () => void;
+  onUpdateSegmentText?: (id: string, text: string) => void;
+  onOpenAITools: (tab?: AIToolTab) => void;
   onAutoCaptions: () => void;
   initialAudioType?: 'music' | 'sfx';
+  segments?: Segment[];
+  activeSegmentId?: string | null;
+  onSelectSegment?: (id: string) => void;
 }
 
 const ResourcePanel: React.FC<ResourcePanelProps> = ({ 
-  activeTab, onSelectMedia, onSelectAudio, onAddText, onOpenAITools, onAutoCaptions, initialAudioType
+  activeTab, onSelectMedia, onSelectAudio, onAddText, onUpdateSegmentText, onOpenAITools, onAutoCaptions, initialAudioType, segments, activeSegmentId, onSelectSegment
 }) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<any[]>([]);
@@ -160,45 +169,74 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
     return (
       <div className="flex-1 flex flex-col h-full bg-[#1e1e1e]">
         
-        {/* Auto Captions Section */}
-        <div className="p-4 border-b border-black/50 bg-[#252525]">
-           <div className="flex items-center gap-2 mb-2">
-                <MagicWandIcon className="w-4 h-4 text-purple-400" />
-                <h3 className="font-bold text-gray-200 text-sm">Auto Captions</h3>
-           </div>
-           <p className="text-[10px] text-gray-400 mb-3 leading-tight">
-               Automatically generate synchronized subtitles from your narration text.
-           </p>
-           <button 
-              onClick={onAutoCaptions}
-              className="w-full py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 rounded text-white text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 border border-white/10"
-            >
-              <TextIcon className="w-3 h-3" /> Generate Subtitles
-            </button>
-        </div>
+        {/* Story Editor Section */}
+        {segments && onUpdateSegmentText && (
+            <div className="flex-1 overflow-hidden flex flex-col">
+                <div className="p-4 border-b border-black/50 bg-[#252525]">
+                    <div className="flex items-center gap-2 mb-2">
+                            <EditIcon className="w-4 h-4 text-purple-400" />
+                            <h3 className="font-bold text-gray-200 text-sm">Story Editor</h3>
+                    </div>
+                    <p className="text-[10px] text-gray-400 leading-tight">
+                        Edit the full script here. Changes sync with the timeline and properties panel.
+                    </p>
+                </div>
+                <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3">
+                    {segments.map((seg, index) => (
+                        <div 
+                            key={seg.id} 
+                            onClick={() => onSelectSegment && onSelectSegment(seg.id)}
+                            className={`flex flex-col gap-1 p-2 rounded border transition-all ${activeSegmentId === seg.id ? 'bg-purple-900/20 border-purple-500 ring-1 ring-purple-500/30' : 'bg-[#181818] border-gray-700 hover:border-gray-500'}`}
+                        >
+                            <div className="flex justify-between items-center px-1">
+                                <span className={`text-[9px] font-bold uppercase tracking-wider ${activeSegmentId === seg.id ? 'text-purple-300' : 'text-gray-500'}`}>Scene {index + 1}</span>
+                                <span className="text-[9px] font-mono text-gray-600">{seg.duration}s</span>
+                            </div>
+                            <textarea
+                                value={seg.narration_text || ''}
+                                onChange={(e) => onUpdateSegmentText(seg.id, e.target.value)}
+                                className="w-full bg-[#0a0a0a] text-gray-300 text-xs p-2 rounded border border-gray-800 focus:border-purple-500 focus:text-white outline-none resize-none leading-relaxed"
+                                rows={3}
+                                placeholder="Enter narration..."
+                            />
+                        </div>
+                    ))}
+                </div>
+            </div>
+        )}
 
-        <div className="p-4 border-b border-black/50">
-          <h3 className="font-bold text-gray-200 text-sm">Quick Presets</h3>
-        </div>
-        <div className="p-4 grid gap-3 overflow-y-auto custom-scrollbar">
-            <button 
-              onClick={() => onAddText("Add your text")}
-              className="h-14 bg-[#252525] hover:bg-[#2a2a2a] border border-gray-700 hover:border-purple-500 rounded flex items-center justify-center text-white font-sans font-bold text-sm transition-all"
-            >
-              Default Text
-            </button>
-            <button 
-              onClick={() => onAddText("TITLE")}
-              className="h-20 bg-[#252525] hover:bg-[#2a2a2a] border border-gray-700 hover:border-purple-500 rounded flex items-center justify-center text-white font-serif font-black text-2xl transition-all"
-            >
-              TITLE
-            </button>
-            <button 
-              onClick={() => onAddText("Subtitle")}
-              className="h-12 bg-[#252525] hover:bg-[#2a2a2a] border border-gray-700 hover:border-purple-500 rounded flex items-center justify-center text-yellow-400 font-mono font-medium text-xs transition-all"
-            >
-              Subtitle
-            </button>
+        {/* Auto Captions & Presets (Collapsed or at bottom) */}
+        <div className="flex-shrink-0 border-t border-black/50 bg-[#1e1e1e] max-h-[40%] overflow-y-auto custom-scrollbar">
+             <div className="p-4 border-b border-black/50 bg-[#252525]">
+                <div className="flex items-center gap-2 mb-2">
+                        <MagicWandIcon className="w-4 h-4 text-purple-400" />
+                        <h3 className="font-bold text-gray-200 text-sm">Auto Captions</h3>
+                </div>
+                <button 
+                    onClick={onAutoCaptions}
+                    className="w-full py-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 rounded text-white text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2 border border-white/10"
+                    >
+                    <TextIcon className="w-3 h-3" /> Generate Subtitles
+                </button>
+            </div>
+
+            <div className="p-4">
+                <h3 className="font-bold text-gray-400 text-[10px] uppercase mb-2">Overlay Presets</h3>
+                <div className="grid gap-2">
+                    <button 
+                    onClick={() => onAddText("Add your text")}
+                    className="h-10 bg-[#252525] hover:bg-[#2a2a2a] border border-gray-700 hover:border-purple-500 rounded flex items-center justify-center text-white font-sans font-bold text-xs transition-all"
+                    >
+                    Default Text
+                    </button>
+                    <button 
+                    onClick={() => onAddText("TITLE")}
+                    className="h-14 bg-[#252525] hover:bg-[#2a2a2a] border border-gray-700 hover:border-purple-500 rounded flex items-center justify-center text-white font-serif font-black text-lg transition-all"
+                    >
+                    TITLE
+                    </button>
+                </div>
+            </div>
         </div>
       </div>
     );
@@ -208,21 +246,45 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
       return (
         <div className="flex-1 flex flex-col h-full bg-[#1e1e1e]">
             <div className="p-4 border-b border-black/50">
-                <h3 className="font-bold text-gray-200 text-sm">AI Magic</h3>
+                <h3 className="font-bold text-gray-200 text-sm">AI Tools</h3>
+                <p className="text-[10px] text-gray-500 mt-1">Select a tool to enhance your video.</p>
             </div>
-            <div className="p-4 flex flex-col gap-3">
-                <button 
-                    onClick={onOpenAITools}
-                    className="p-4 bg-gradient-to-br from-purple-900/50 to-gray-800 border border-purple-500/30 rounded-xl hover:shadow-lg hover:shadow-purple-900/20 transition-all text-left group"
-                >
-                    <div className="flex items-center gap-2 mb-2">
-                        <MagicWandIcon className="text-purple-400" />
-                        <span className="font-bold text-white text-sm">Generator Hub</span>
-                    </div>
-                    <p className="text-[10px] text-gray-400 group-hover:text-gray-300 leading-relaxed">
-                        Create scripts, generate images, videos, and realistic speech using Gemini.
-                    </p>
-                </button>
+            <div className="p-4 grid gap-3 overflow-y-auto custom-scrollbar">
+                
+                <AIToolCard 
+                    icon={<MagicWandIcon className="w-6 h-6 text-purple-400" />}
+                    title="Text to Speech"
+                    desc="Generate professional voiceovers from your script."
+                    onClick={() => onOpenAITools('tts')}
+                />
+                
+                <AIToolCard 
+                    icon={<EditIcon className="w-6 h-6 text-blue-400" />}
+                    title="Edit Image"
+                    desc="Enhance, recolor, or modify existing images with AI."
+                    onClick={() => onOpenAITools('edit-image')}
+                />
+
+                <AIToolCard 
+                    icon={<MediaIcon className="w-6 h-6 text-pink-400" />}
+                    title="Generate Image"
+                    desc="Create unique images from text descriptions."
+                    onClick={() => onOpenAITools('generate-image')}
+                />
+
+                 <AIToolCard 
+                    icon={<EffectsIcon className="w-6 h-6 text-green-400" />}
+                    title="Generate Video"
+                    desc="Turn text prompts into short video clips using Veo."
+                    onClick={() => onOpenAITools('generate-video')}
+                />
+
+                <AIToolCard 
+                    icon={<VolumeXIcon className="w-6 h-6 text-orange-400" />}
+                    title="Generate SFX"
+                    desc="Create sound effects based on segment context."
+                    onClick={() => onOpenAITools('generate-sfx')}
+                />
             </div>
         </div>
       )
@@ -458,5 +520,20 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
     </div>
   );
 };
+
+const AIToolCard: React.FC<{ icon: React.ReactNode, title: string, desc: string, onClick: () => void }> = ({ icon, title, desc, onClick }) => (
+    <button 
+        onClick={onClick}
+        className="flex items-start gap-3 p-3 bg-[#252525] hover:bg-[#2a2a2a] border border-gray-700 hover:border-purple-500/50 rounded-lg transition-all text-left group"
+    >
+        <div className="p-2 bg-gray-800 rounded-md group-hover:bg-purple-900/30 transition-colors">
+            {icon}
+        </div>
+        <div>
+            <h4 className="font-bold text-gray-200 text-sm mb-1">{title}</h4>
+            <p className="text-[10px] text-gray-400 leading-tight">{desc}</p>
+        </div>
+    </button>
+)
 
 export default ResourcePanel;
