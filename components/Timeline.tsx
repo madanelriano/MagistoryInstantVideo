@@ -290,10 +290,12 @@ const Timeline: React.FC<TimelineProps> = ({
                                         <div
                                             key={segment.id}
                                             style={{ width }}
-                                            className={`relative flex-shrink-0 h-full overflow-visible border-r border-black/50 group/clip select-none
-                                                ${isActive ? 'ring-2 ring-purple-500 z-10' : 'brightness-90 hover:brightness-100'}
-                                                ${isDragging ? 'opacity-50' : 'opacity-100'}
-                                                cursor-grab active:cursor-grabbing
+                                            className={`relative flex-shrink-0 h-full overflow-visible border-r border-black/50 group/clip select-none transition-all duration-150 ease-out
+                                                ${isActive 
+                                                    ? 'ring-2 ring-purple-400 z-20 shadow-[0_0_15px_rgba(168,85,247,0.6)] brightness-110 scale-[1.01] rounded-sm' 
+                                                    : 'brightness-75 hover:brightness-100 opacity-90 hover:opacity-100 hover:z-10'
+                                                }
+                                                ${isDragging ? 'opacity-50 scale-95 cursor-grabbing' : 'cursor-grab active:cursor-grabbing'}
                                             `}
                                             onMouseDown={(e) => handleMouseDown(e, 'move-segment', segment.id, index)}
                                             onClick={(e) => { e.stopPropagation(); setActiveSegmentId(segment.id); }}
@@ -324,7 +326,7 @@ const Timeline: React.FC<TimelineProps> = ({
                                                 className="absolute top-0 bottom-0 right-0 w-4 cursor-ew-resize z-20 hover:bg-purple-500/50 flex items-center justify-center opacity-0 group-hover/clip:opacity-100 transition-opacity"
                                                 onMouseDown={(e) => handleMouseDown(e, 'resize-segment', segment.id, segment.duration)}
                                             >
-                                                <div className="w-1 h-8 bg-white/80 rounded-full"></div>
+                                                <div className="w-1 h-8 bg-white/80 rounded-full shadow-sm"></div>
                                             </div>
                                         </div>
                                     );
@@ -364,10 +366,14 @@ const Timeline: React.FC<TimelineProps> = ({
                                             className="h-8 md:h-8 bg-[#1e1e1e] relative rounded border border-white/5 overflow-visible hover:border-teal-500/50 transition-colors"
                                         >
                                             <div 
-                                                className={`absolute top-0 bottom-0 flex items-center px-2 overflow-visible border rounded-sm cursor-grab active:cursor-grabbing transition-colors group/audio
+                                                className={`absolute top-0 bottom-0 flex items-center px-2 overflow-visible border rounded-sm cursor-grab active:cursor-grabbing transition-all duration-200 group/audio
                                                     ${track.type === 'music' 
-                                                        ? (isActive ? 'bg-teal-900/60 border-teal-500 ring-1 ring-teal-500' : 'bg-teal-900/40 border-teal-800/50') 
-                                                        : (isActive ? 'bg-orange-900/60 border-orange-500 ring-1 ring-orange-500' : 'bg-orange-900/40 border-orange-800/50')
+                                                        ? (isActive 
+                                                            ? 'bg-teal-800/90 border-teal-400 ring-2 ring-teal-400 z-20 shadow-[0_4px_12px_rgba(20,184,166,0.5)]' 
+                                                            : 'bg-teal-900/40 border-teal-800/50 opacity-80 hover:opacity-100 hover:bg-teal-900/60') 
+                                                        : (isActive 
+                                                            ? 'bg-orange-800/90 border-orange-400 ring-2 ring-orange-400 z-20 shadow-[0_4px_12px_rgba(249,115,22,0.5)]' 
+                                                            : 'bg-orange-900/40 border-orange-800/50 opacity-80 hover:opacity-100 hover:bg-orange-900/60')
                                                     }
                                                 `}
                                                 style={{ 

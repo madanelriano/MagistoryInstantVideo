@@ -1,4 +1,5 @@
 
+
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import type { VideoScript, Segment, TransitionEffect, AudioClip } from '../types';
 import { searchPixabayAudio } from "./pixabayService";
@@ -112,7 +113,7 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
         const keyword = segment.search_keywords_for_media.trim();
         
         // Fallback placeholder
-        let mediaUrl = `https://picsum.photos/seed/${encodeURIComponent(keyword.split(' ')[0])}/1280/720`;
+        let mediaUrl = `https://picsum.photos/seed/${encodeURIComponent(keyword.split(' ')[0])}/640/360`; // Default SD
         let mediaType: 'image' | 'video' = 'image';
         
         try {
@@ -122,7 +123,10 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
             if (videoResults && videoResults.length > 0) {
                 const video = videoResults[0];
                 // Pexels mapping from service returns normalized structure
-                const bestVideoFile = video.video_files.find((f: any) => f.quality === 'hd') || video.video_files[0];
+                // PRIORITIZE SD/Tiny for draft creation
+                const bestVideoFile = video.video_files.find((f: any) => f.quality === 'sd') || 
+                                      video.video_files.find((f: any) => f.quality === 'tiny') || 
+                                      video.video_files[0];
                 if (bestVideoFile) {
                     mediaUrl = bestVideoFile.link;
                     mediaType = 'video';
@@ -133,7 +137,7 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
             if (mediaType !== 'video') {
                 const photoResults = await searchPexelsPhotos(keyword, aspectRatio);
                 if (photoResults && photoResults.length > 0) {
-                    mediaUrl = photoResults[0].src.large2x;
+                    mediaUrl = photoResults[0].src.medium; // Use medium for faster loading
                     mediaType = 'image';
                 }
             }
@@ -277,6 +281,29 @@ export async function suggestMediaKeywords(narrationText: string, videoContext?:
     // Don't throw here, just return empty so UI doesn't break
     return "";
   }
+}
+
+export async function generateSFXKeywords(prompt: string): Promise<string> {
+    const ai = getAI();
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: `The user wants a sound effect matching this description: "${prompt}".
+            Convert this description into a comma-separated list of 3 precise, short search keywords suitable for a sound effects library like Pixabay.
+            
+            Example Input: "A spooky ghost in a hallway"
+            Example Output: ghost, eerie wind, creaking floor
+            
+            Return ONLY the comma-separated list.`,
+            config: {
+                temperature: 0.5,
+            }
+        });
+        return response.text.trim();
+    } catch (error) {
+        console.error("Error generating SFX keywords:", error);
+        return prompt; // Fallback to original prompt
+    }
 }
 
 export async function generateImageFromPrompt(prompt: string): Promise<string> {

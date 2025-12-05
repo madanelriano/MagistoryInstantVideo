@@ -55,16 +55,16 @@ async function saveAsset(url: string, jobId: string, type: 'image' | 'video' | '
 }
 
 // Generate Advanced Substation Alpha (.ass) subtitle file for perfect sync
-function createASSFile(filePath: string, text: string, timings: any[], duration: number) {
+function createASSFile(filePath: string, text: string, timings: any[], duration: number, width: number, height: number) {
     let content = `[Script Info]
 ScriptType: v4.00+
-PlayResX: 1280
-PlayResY: 720
+PlayResX: ${width}
+PlayResY: ${height}
 WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,0,2,10,10,60,1
+Style: Default,DejaVu Sans,${Math.round(height * 0.06)},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,0,2,10,10,${Math.round(height * 0.08)},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -121,8 +121,8 @@ export async function renderVideo(job: RenderJob): Promise<string> {
     }
 
     const outputPath = path.join(jobDir, 'output.mp4');
-    const width = 1280;
-    const height = 720;
+    const width = job.resolution?.width || 1280;
+    const height = job.resolution?.height || 720;
 
     try {
         const segmentFiles: string[] = [];
@@ -181,7 +181,7 @@ export async function renderVideo(job: RenderJob): Promise<string> {
             let assPath = '';
             if (seg.narration_text) {
                 assPath = path.join(jobDir, `subs_${i}.ass`);
-                createASSFile(assPath, seg.narration_text, seg.wordTimings, exactDuration);
+                createASSFile(assPath, seg.narration_text, seg.wordTimings, exactDuration, width, height);
             }
 
             await new Promise<void>((resolve, reject) => {
