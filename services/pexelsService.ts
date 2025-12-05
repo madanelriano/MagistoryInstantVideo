@@ -13,6 +13,7 @@ interface PexelsPhoto {
     src: {
         large2x: string;
         medium: string;
+        original: string;
     };
     alt: string;
     photographer: string;
@@ -22,8 +23,10 @@ interface PexelsVideo {
     id: number;
     image: string; // poster image
     video_files: {
-        quality: string;
+        quality: string; // 'hd', 'sd', 'uhd'
         link: string;
+        width: number;
+        height: number;
     }[];
     user: {
         name: string;
@@ -31,10 +34,9 @@ interface PexelsVideo {
 }
 
 async function pexelsFetch(endpoint: string) {
-    if (PEXELS_API_KEY === 'YOUR_PEXELS_API_KEY_HERE') {
-        console.error("Pexels API Key is not configured. Please set `process.env.PEXELS_API_KEY`.");
-        // Return a mock error response or an empty array to prevent app crash
-        return Promise.reject("Pexels API key not found. Please add it to your environment variables.");
+    if (!PEXELS_API_KEY || PEXELS_API_KEY === 'YOUR_PEXELS_API_KEY_HERE') {
+        console.error("Pexels API Key is not configured.");
+        return { photos: [], videos: [] };
     }
 
     const response = await fetch(`${PEXELS_API_BASE}${endpoint}`, {
@@ -51,12 +53,49 @@ async function pexelsFetch(endpoint: string) {
 }
 
 
-export async function searchPexelsPhotos(query: string, orientation: PexelsOrientation = 'landscape'): Promise<PexelsPhoto[]> {
-    const data = await pexelsFetch(`/v1/search?query=${encodeURIComponent(query)}&per_page=20&orientation=${orientation}`);
-    return data.photos || [];
+export async function searchPexelsPhotos(query: string, orientation: PexelsOrientation = 'landscape'): Promise<any[]> {
+    try {
+        const safeQuery = query.substring(0, 100).trim();
+        const data = await pexelsFetch(`/v1/search?query=${encodeURIComponent(safeQuery)}&per_page=20&orientation=${orientation}`);
+        
+        return (data.photos || []).map((photo: PexelsPhoto) => ({
+            id: photo.id,
+            src: {
+                medium: photo.src.medium, // For thumbnail
+                large2x: photo.src.large2x // For canvas
+            },
+            alt: photo.alt,
+            photographer: photo.photographer,
+            _type: 'image' // Normalized type for app
+        }));
+    } catch (e) {
+        console.warn("Pexels Photo Search failed:", e);
+        return [];
+    }
 }
 
-export async function searchPexelsVideos(query: string, orientation: PexelsOrientation = 'landscape'): Promise<PexelsVideo[]> {
-    const data = await pexelsFetch(`/videos/search?query=${encodeURIComponent(query)}&per_page=20&orientation=${orientation}`);
-    return data.videos || [];
+export async function searchPexelsVideos(query: string, orientation: PexelsOrientation = 'landscape'): Promise<any[]> {
+    try {
+        const safeQuery = query.substring(0, 100).trim();
+        const data = await pexelsFetch(`/videos/search?query=${encodeURIComponent(safeQuery)}&per_page=20&orientation=${orientation}`);
+        
+        return (data.videos || []).map((video: PexelsVideo) => ({
+            id: video.id,
+            image: video.image, 
+            video_files: video.video_files.map(f => ({
+                // Map Pexels qualities to our app's expected qualities
+                quality: f.width >= 1280 ? 'hd' : (f.width < 640 ? 'tiny' : 'sd'),
+                link: f.link,
+                width: f.width,
+                height: f.height
+            })),
+            user: {
+                name: video.user.name
+            },
+            _type: 'video' // Normalized type for app
+        }));
+    } catch (e) {
+        console.warn("Pexels Video Search failed:", e);
+        return [];
+    }
 }

@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { searchPixabayImages, searchPixabayVideos, searchPixabayAudio } from '../services/pixabayService';
+import { searchPixabayAudio } from '../services/pixabayService';
+import { searchPexelsPhotos, searchPexelsVideos } from '../services/pexelsService';
 import { MagicWandIcon, PlayIcon, MusicIcon, TextIcon, SearchIcon, ExportIcon, VolumeXIcon } from './icons';
 import LoadingSpinner from './LoadingSpinner';
 import { getCachedMediaUrl } from '../utils/cache';
@@ -22,13 +23,25 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
   const [results, setResults] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [downloadingId, setDownloadingId] = useState<number | string | null>(null);
+  
+  // Tab specific states
   const [audioSearchType, setAudioSearchType] = useState<'music' | 'sfx'>('music');
+  const [mediaSource, setMediaSource] = useState<'stock' | 'upload'>('stock');
+  const [stockMediaType, setStockMediaType] = useState<'all' | 'image' | 'video'>('all');
+
+  // Hover Preview State
+  const [hoveredVideoId, setHoveredVideoId] = useState<number | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setResults([]);
     setQuery('');
-    if (activeTab === 'media') handleSearch('business');
+    if (activeTab === 'media') {
+        setMediaSource('stock');
+        setStockMediaType('all');
+        handleSearch('business');
+    }
     if (activeTab === 'audio') {
         // Respect initial type if provided
         if (initialAudioType) setAudioSearchType(initialAudioType);
@@ -36,12 +49,15 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
     }
   }, [activeTab, initialAudioType]);
 
-  // Re-search when switching audio type
+  // Re-search when switching audio type or stock media type
   useEffect(() => {
       if (activeTab === 'audio' && query) {
           handleSearch(query);
       }
-  }, [audioSearchType]);
+      if (activeTab === 'media' && mediaSource === 'stock' && query) {
+          handleSearch(query);
+      }
+  }, [audioSearchType, stockMediaType]);
 
   const handleSearch = async (overrideQuery?: string) => {
     const q = overrideQuery || query;
@@ -51,18 +67,28 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
 
     try {
       if (activeTab === 'media') {
-        const [photos, videos] = await Promise.all([
-           searchPixabayImages(q),
-           searchPixabayVideos(q)
-        ]);
-        const combined = [];
-        const max = Math.max(photos.length, videos.length);
-        for(let i=0; i<max; i++) {
-           if(photos[i]) combined.push({...photos[i], type: 'image'});
-           if(videos[i]) combined.push({...videos[i], type: 'video'});
+        let finalResults: any[] = [];
+        
+        if (stockMediaType === 'all') {
+            const [photos, videos] = await Promise.all([
+               searchPexelsPhotos(q),
+               searchPexelsVideos(q)
+            ]);
+            const max = Math.max(photos.length, videos.length);
+            for(let i=0; i<max; i++) {
+               if(photos[i]) finalResults.push({...photos[i], type: 'image'});
+               if(videos[i]) finalResults.push({...videos[i], type: 'video'});
+            }
+        } else if (stockMediaType === 'image') {
+            const photos = await searchPexelsPhotos(q);
+            finalResults = photos.map(p => ({...p, type: 'image'}));
+        } else if (stockMediaType === 'video') {
+            const videos = await searchPexelsVideos(q);
+            finalResults = videos.map(v => ({...v, type: 'video'}));
         }
-        setResults(combined);
+        setResults(finalResults);
       } else if (activeTab === 'audio') {
+        // Keep Pixabay for Audio (Pexels doesn't support audio)
         const audio = await searchPixabayAudio(q, audioSearchType);
         setResults(audio);
       }
@@ -79,8 +105,10 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
           setDownloadingId(item.id);
           try {
               // Prefer SD (small) or Tiny for quota saving
+              // Pexels mapping: look for width < 640 for tiny/sd
               const tinyVid = item.video_files.find((v: any) => v.quality === 'tiny');
               const sdVid = item.video_files.find((v: any) => v.quality === 'sd');
+              // Fallback to first available if qualities aren't tagged perfectly
               const targetUrl = sdVid?.link || tinyVid?.link || item.video_files[0].link;
               
               const cachedUrl = await getCachedMediaUrl(targetUrl);
@@ -106,11 +134,26 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
       const file = e.target.files?.[0];
       if (file) {
           const url = URL.createObjectURL(file);
-          // Default to 'music' unless user explicitly was in SFX mode
-          onSelectAudio(url, file.name, audioSearchType);
+          
+          if (activeTab === 'audio') {
+               onSelectAudio(url, file.name, audioSearchType);
+          } else if (activeTab === 'media') {
+               const type = file.type.startsWith('video/') ? 'video' : 'image';
+               onSelectMedia(url, type);
+          }
       }
       // Reset input
       if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  const getSearchPlaceholder = () => {
+      if (activeTab === 'audio') return `Search ${audioSearchType === 'music' ? 'Music' : 'SFX'}...`;
+      if (activeTab === 'media') {
+          if (stockMediaType === 'image') return 'Search Photos...';
+          if (stockMediaType === 'video') return 'Search Videos...';
+          return 'Search Media...';
+      }
+      return 'Search...';
   }
 
   if (activeTab === 'text') {
@@ -185,11 +228,32 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
       )
   }
 
+  // Helper to check if search should be visible
+  const showSearch = (activeTab === 'media' && mediaSource === 'stock') || activeTab === 'audio';
+
   return (
     <div className="flex-1 flex flex-col h-full bg-[#1e1e1e]">
       <div className="p-3 border-b border-black/50 flex flex-col gap-2">
         <h3 className="font-bold text-gray-200 text-sm capitalize">{activeTab} Library</h3>
         
+        {/* Media Type Toggles */}
+        {activeTab === 'media' && (
+             <div className="flex gap-2 mb-1">
+                <button 
+                    onClick={() => setMediaSource('stock')}
+                    className={`flex-1 py-1.5 text-[10px] font-bold uppercase rounded flex items-center justify-center gap-1 transition-colors ${mediaSource === 'stock' ? 'bg-purple-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                >
+                    <SearchIcon className="w-3 h-3" /> Stock
+                </button>
+                <button 
+                    onClick={() => setMediaSource('upload')}
+                    className={`flex-1 py-1.5 text-[10px] font-bold uppercase rounded flex items-center justify-center gap-1 transition-colors ${mediaSource === 'upload' ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                >
+                    <ExportIcon className="w-3 h-3" /> Upload
+                </button>
+            </div>
+        )}
+
         {/* Audio Type Toggles */}
         {activeTab === 'audio' && (
             <div className="flex gap-2 mb-1">
@@ -208,19 +272,37 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
             </div>
         )}
 
-        <div className="relative">
-          <input
-            type="text"
-            className="w-full bg-[#121212] border border-gray-700 rounded-md py-2 pl-9 pr-3 text-xs text-white focus:outline-none focus:border-purple-500 placeholder-gray-500 transition-colors"
-            placeholder={`Search ${activeTab === 'audio' ? audioSearchType : activeTab}...`}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-          <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
-        </div>
+        {/* Search Bar */}
+        {showSearch && (
+            <div className="relative mb-2">
+                <input
+                    type="text"
+                    className="w-full bg-[#121212] border border-gray-700 rounded-md py-2 pl-9 pr-3 text-xs text-white focus:outline-none focus:border-purple-500 placeholder-gray-500 transition-colors"
+                    placeholder={getSearchPlaceholder()}
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                />
+                <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+            </div>
+        )}
         
-        {/* Upload Button for Audio */}
+        {/* Media Type Filter (Sub-tabs for Stock) */}
+        {activeTab === 'media' && mediaSource === 'stock' && (
+            <div className="flex bg-[#252525] p-1 rounded-md mb-2">
+                {(['all', 'image', 'video'] as const).map(type => (
+                    <button 
+                        key={type}
+                        onClick={() => setStockMediaType(type)}
+                        className={`flex-1 py-1 text-[10px] font-bold uppercase rounded transition-colors ${stockMediaType === type ? 'bg-gray-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
+                    >
+                        {type === 'image' ? 'Photos' : type === 'video' ? 'Videos' : 'All'}
+                    </button>
+                ))}
+            </div>
+        )}
+        
+        {/* Upload Button for Audio (Keep existing style for Audio tab) */}
         {activeTab === 'audio' && (
             <div>
                  <input 
@@ -247,36 +329,105 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
         ) : (
           <>
             {activeTab === 'media' && (
-              <div className="grid grid-cols-2 gap-2">
-                {results.map((item, i) => (
-                  <div 
-                    key={i} 
-                    className="aspect-square bg-gray-800 rounded-md overflow-hidden relative group cursor-pointer border border-transparent hover:border-purple-500 transition-all"
-                    onClick={() => handleMediaSelect(item)}
-                  >
-                    {item.type === 'video' ? (
-                       <>
-                         <img src={item.image} className="w-full h-full object-cover" loading="lazy" />
-                         <div className="absolute top-1 right-1 bg-black/60 rounded px-1 text-[7px] font-bold text-white">VIDEO</div>
-                         {/* Download Indicator */}
-                         {downloadingId === item.id && (
-                             <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-20">
-                                 <LoadingSpinner />
-                                 <span className="text-[8px] text-white mt-1">Caching...</span>
-                             </div>
-                         )}
-                       </>
-                    ) : (
-                       <img src={item.src.medium} className="w-full h-full object-cover" loading="lazy" />
-                    )}
-                    <div className="absolute inset-0 bg-black/20 group-hover:bg-black/40 transition-colors"></div>
-                  </div>
-                ))}
-              </div>
+              <>
+                  {mediaSource === 'stock' ? (
+                     <>
+                        <div className="text-[10px] text-gray-500 text-right mb-2 flex items-center justify-end gap-1">
+                            <span>Powered by Pexels</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                            {results.map((item, i) => (
+                            <div 
+                                key={i} 
+                                className="aspect-square bg-gray-800 rounded-md overflow-hidden relative group cursor-pointer border border-transparent hover:border-purple-500 transition-all"
+                                onClick={() => handleMediaSelect(item)}
+                                onMouseEnter={() => item.type === 'video' && setHoveredVideoId(item.id)}
+                                onMouseLeave={() => setHoveredVideoId(null)}
+                            >
+                                {item.type === 'video' ? (
+                                <>
+                                    {hoveredVideoId === item.id ? (
+                                        <video 
+                                            src={item.video_files.find((v: any) => v.quality === 'tiny')?.link || item.video_files[0].link}
+                                            className="w-full h-full object-cover"
+                                            autoPlay 
+                                            muted 
+                                            loop 
+                                            playsInline
+                                        />
+                                    ) : (
+                                        <>
+                                            <img src={item.image} className="w-full h-full object-cover" loading="lazy" />
+                                            {/* Play Icon Overlay */}
+                                            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                                                <div className="bg-black/40 rounded-full p-1.5 backdrop-blur-[1px]">
+                                                    <PlayIcon className="w-5 h-5 text-white/90" />
+                                                </div>
+                                            </div>
+                                        </>
+                                    )}
+
+                                    <div className="absolute top-1 right-1 bg-black/60 rounded px-1 text-[7px] font-bold text-white z-20 pointer-events-none">VIDEO</div>
+                                    
+                                    {/* Download Indicator */}
+                                    {downloadingId === item.id && (
+                                        <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-30">
+                                            <LoadingSpinner />
+                                            <span className="text-[8px] text-white mt-1">Caching...</span>
+                                        </div>
+                                    )}
+                                </>
+                                ) : (
+                                <img src={item.src.medium} className="w-full h-full object-cover" loading="lazy" />
+                                )}
+                                <div className="absolute inset-0 bg-black/20 group-hover:bg-black/0 transition-colors pointer-events-none"></div>
+                                
+                                {/* Credits & License Overlay */}
+                                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black via-black/80 to-transparent p-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none flex flex-col justify-end min-h-[40px]">
+                                    <p className="text-[9px] text-gray-300 leading-tight">
+                                        {item.type === 'video' ? 'Video' : 'Photo'} by <span className="text-white font-medium hover:underline">{item.photographer || item.user?.name}</span> on Pexels
+                                    </p>
+                                    <p className="text-[8px] text-green-400 mt-1 font-medium bg-green-900/30 inline-block px-1 rounded border border-green-500/20 w-fit">
+                                        Free for Commercial Use
+                                    </p>
+                                </div>
+                            </div>
+                            ))}
+                        </div>
+                        {results.length === 0 && !isLoading && (
+                                <div className="col-span-2 text-center text-gray-500 py-8 text-xs">
+                                    No results found for "{query}".
+                                </div>
+                        )}
+                     </>
+                  ) : (
+                      <div className="flex flex-col items-center justify-center h-full text-center p-4 border-2 border-dashed border-gray-700 rounded-lg hover:border-blue-500 transition-colors bg-[#252525] group">
+                        <div className="w-16 h-16 bg-gray-800 rounded-full flex items-center justify-center mb-4 text-gray-500 group-hover:text-blue-500 transition-colors">
+                             <ExportIcon className="w-8 h-8" />
+                        </div>
+                        <h3 className="text-white font-bold mb-2">Upload Media</h3>
+                        <p className="text-xs text-gray-400 mb-6">Support Image (JPG, PNG) & Video (MP4)</p>
+                        <button 
+                            onClick={() => fileInputRef.current?.click()}
+                            className="px-6 py-2 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded shadow-lg transition-colors"
+                        >
+                            Select File
+                        </button>
+                        <input 
+                            type="file" 
+                            accept="image/*,video/*" 
+                            ref={fileInputRef} 
+                            className="hidden" 
+                            onChange={handleFileUpload}
+                        />
+                    </div>
+                  )}
+              </>
             )}
 
             {activeTab === 'audio' && (
               <div className="flex flex-col gap-1">
+                 <div className="text-[10px] text-gray-500 text-right mb-1">Powered by Pixabay</div>
                 {results.map((item, i) => (
                   <div 
                     key={i} 
