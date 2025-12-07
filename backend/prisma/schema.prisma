@@ -1,1 +1,33 @@
-��ޭ�h�
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  name      String?
+  googleId  String   @unique
+  credits   Int      @default(10) // User baru mendapat 10 kredit gratis
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  transactions CreditTransaction[]
+}
+
+model CreditTransaction {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  amount    Int      // Nilai negatif untuk pengurangan, positif untuk pembelian/hadiah
+  action    String   // Contoh: "generate_video", "generate_audio", "buy_credits"
+  details   String?  // Info tambahan (opsional)
+  createdAt DateTime @default(now())
+}
