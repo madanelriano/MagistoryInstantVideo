@@ -52,6 +52,9 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   const [isAIToolsOpen, setIsAIToolsOpen] = useState(false);
   const [aiToolsInitialTab, setAiToolsInitialTab] = useState<AIToolTab>('edit-image');
 
+  // Generation Progress State
+  const [generationProgress, setGenerationProgress] = useState<{ current: number; total: number } | null>(null);
+
   // Calculate total duration
   const totalDuration = segments.reduce((acc, s) => acc + s.duration, 0);
 
@@ -257,8 +260,15 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   }, [updateSegments]);
 
   const handleGenerateAllNarrations = useCallback(async () => {
+      // 1. Identify segments that need generation
+      const textSegments = segments.filter(s => !!s.narration_text);
+      if (textSegments.length === 0) return;
+
+      setGenerationProgress({ current: 0, total: textSegments.length });
+      
       const newSegments = [...segments];
       let hasUpdates = false;
+      let completed = 0;
 
       for (let i = 0; i < newSegments.length; i++) {
           const seg = newSegments[i];
@@ -268,14 +278,19 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                  const wavUrl = createWavBlobUrl(base64Audio);
                  const duration = await getAudioDuration(wavUrl);
                  
+                 // CRITICAL: Update segment duration to match audio exactly
                  newSegments[i] = {
                      ...seg,
                      audioUrl: wavUrl,
-                     duration: duration
+                     duration: duration > 0 ? duration : seg.duration,
+                     audioVolume: 1.0 // Ensure volume is up
                  };
                  hasUpdates = true;
              } catch (e) {
                  console.error(`Failed to generate narration for segment ${i}`, e);
+             } finally {
+                 completed++;
+                 setGenerationProgress({ current: completed, total: textSegments.length });
              }
           }
       }
@@ -283,11 +298,12 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
       if (hasUpdates) {
           updateSegments(newSegments);
       }
+      setGenerationProgress(null);
   }, [segments, updateSegments]);
 
 
   const handleUpdateSegmentAudio = useCallback((segmentId: string, newAudioUrl: string | undefined, audioDuration?: number) => {
-    updateSegments(prev => prev.map(s => s.id === segmentId ? { ...s, audioUrl: newAudioUrl, duration: (audioDuration && audioDuration > 0 && audioDuration < s.duration ? audioDuration : s.duration) } : s));
+    updateSegments(prev => prev.map(s => s.id === segmentId ? { ...s, audioUrl: newAudioUrl, duration: (audioDuration && audioDuration > 0 ? audioDuration : s.duration) } : s));
   }, [updateSegments]);
 
   const handleUpdateWordTimings = useCallback((segmentId: string, timings: WordTiming[]) => {
@@ -602,6 +618,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                 onUpdateAudio={(newUrl, duration) => handleUpdateSegmentAudio(activeSegment.id, newUrl, duration)}
                 initialTab={aiToolsInitialTab}
                 onGenerateAllNarrations={handleGenerateAllNarrations}
+                generationProgress={generationProgress}
             />
         )}
 
