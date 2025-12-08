@@ -1,30 +1,35 @@
-# Gunakan image Node.js yang ringan
 FROM node:18-slim
 
-# Install FFmpeg DAN Font (Wajib untuk drawtext/subtitle)
-# fonts-dejavu: font standar yang dibutuhkan FFmpeg
-# fontconfig: utility agar sistem bisa mendeteksi font tersebut
-RUN apt-get update && \
-    apt-get install -y ffmpeg fonts-dejavu fontconfig && \
-    rm -rf /var/lib/apt/lists/*
+# 1. Install System Dependencies
+# ffmpeg: untuk render video
+# openssl: diperlukan oleh Prisma Client
+# fonts-dejavu & fontconfig: untuk subtitle video agar tidak kotak-kotak
+RUN apt-get update -y && apt-get install -y \
+    openssl \
+    ffmpeg \
+    fonts-dejavu \
+    fontconfig \
+    && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy package files untuk install dependencies
+# 2. Copy Package definitions
 COPY package*.json ./
 
-# Install dependencies
+# 3. CRITICAL STEP: Copy Prisma Schema SEBELUM menjalankan npm install
+# Ini memperbaiki error "Could not find Prisma Schema" saat postinstall berjalan
+COPY prisma ./prisma/
+
+# 4. Install Dependencies
+# Saat ini berjalan, script 'postinstall' (prisma generate) akan sukses
+# karena folder prisma/ sudah ada di langkah sebelumnya.
 RUN npm install
 
-# Copy source code backend
+# 5. Copy seluruh sisa source code backend
 COPY . .
 
-# Build TypeScript code
+# 6. Build TypeScript code
 RUN npm run build
 
-# Expose port (Railway akan override, tapi 3001 default)
-EXPOSE 3001
-
-# Jalankan server
+# 7. Start the server
 CMD ["node", "dist/index.js"]
