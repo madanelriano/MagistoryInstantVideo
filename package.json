@@ -13,7 +13,7 @@
     "postinstall": "prisma generate --schema=./backend/prisma/schema.prisma || echo 'Prisma generate skipped (optional for frontend)'"
   },
   "dependencies": {
-    "@google/genai": "^0.0.2",
+    "@google/genai": "*",
     "@prisma/client": "^5.10.2",
     "@react-oauth/google": "^0.12.1",
     "axios": "^1.6.7",
