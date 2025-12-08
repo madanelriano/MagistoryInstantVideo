@@ -1,33 +1,35 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+FROM node:18-slim
 
-generator client {
-  provider = "prisma-client-js"
-}
+# 1. Install System Dependencies
+# ffmpeg: untuk render video
+# openssl: diperlukan oleh Prisma Client
+# fonts-dejavu & fontconfig: untuk subtitle video agar tidak kotak-kotak
+RUN apt-get update -y && apt-get install -y \
+    openssl \
+    ffmpeg \
+    fonts-dejavu \
+    fontconfig \
+    && rm -rf /var/lib/apt/lists/*
 
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
+WORKDIR /app
 
-model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  name      String?
-  googleId  String   @unique
-  credits   Int      @default(10) // User baru mendapat 10 kredit gratis
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  
-  transactions CreditTransaction[]
-}
+# 2. Copy Package definitions
+COPY package*.json ./
 
-model CreditTransaction {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id])
-  amount    Int      // Nilai negatif untuk pengurangan, positif untuk pembelian/hadiah
-  action    String   // Contoh: "generate_video", "generate_audio", "buy_credits"
-  details   String?  // Info tambahan (opsional)
-  createdAt DateTime @default(now())
-}
+# 3. CRITICAL STEP: Copy Prisma Schema SEBELUM menjalankan npm install
+# Ini memperbaiki error "Could not find Prisma Schema" saat postinstall berjalan
+COPY prisma ./prisma/
+
+# 4. Install Dependencies
+# Saat ini berjalan, script 'postinstall' (prisma generate) akan sukses
+# karena folder prisma/ sudah ada di langkah sebelumnya.
+RUN npm install
+
+# 5. Copy seluruh sisa source code backend
+COPY . .
+
+# 6. Build TypeScript code
+RUN npm run build
+
+# 7. Start the server
+CMD ["node", "dist/index.js"]
