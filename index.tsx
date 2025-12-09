@@ -5,12 +5,16 @@ import App from './App';
 import { GoogleOAuthProvider } from '@react-oauth/google';
 import { AuthProvider } from './contexts/AuthContext';
 
-// GANTI DENGAN CLIENT ID ANDA DARI GOOGLE CLOUD CONSOLE
-const GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com";
+// Use environment variable for Client ID
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || "";
 
 const rootElement = (window as any).document.getElementById('root');
 if (!rootElement) {
   throw new Error("Could not find root element to mount to");
+}
+
+if (!GOOGLE_CLIENT_ID) {
+    console.warn("GOOGLE_CLIENT_ID is missing in environment variables. Google Login will fail.");
 }
 
 const root = ReactDOM.createRoot(rootElement);

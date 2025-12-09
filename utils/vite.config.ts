@@ -13,6 +13,8 @@ export default defineConfig(({ mode }) => {
       'process.env.PEXELS_API_KEY': JSON.stringify(env.PEXELS_API_KEY || process.env.PEXELS_API_KEY),
       // Backend URL configuration
       'process.env.BACKEND_URL': JSON.stringify(env.BACKEND_URL || process.env.BACKEND_URL || 'http://localhost:3001'),
+      // Google Auth configuration:
+      'process.env.GOOGLE_CLIENT_ID': JSON.stringify(env.GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || ''),
       
       'process.env': JSON.stringify({})
     },
