@@ -22,6 +22,23 @@ const App: React.FC = () => {
   const { user, deductCredits, isLoading: isAuthLoading } = useAuth();
   const [showLoginModal, setShowLoginModal] = useState(false);
 
+  // Auto-close modal and redirect when user is detected
+  useEffect(() => {
+      if (user) {
+          setShowLoginModal(false);
+          // If we were stuck on the modal, ensure we are on a valid page.
+          // The user requested to be redirected to Landing Page after login.
+          if (view === 'prompt' && !videoScript) {
+             // Keep on prompt if they were there
+          } else if (view === 'landing') {
+             // Stay on landing
+          } else {
+             // Default fallback or specific redirect if needed
+             // setView('landing'); 
+          }
+      }
+  }, [user, view, videoScript]);
+
   // Force login on Get Started or Manual Start
   const checkAuth = () => {
       if (!user) {

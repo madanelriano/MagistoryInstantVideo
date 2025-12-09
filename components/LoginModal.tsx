@@ -24,12 +24,18 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, message }) => 
                     <GoogleLogin
                         onSuccess={async (credentialResponse) => {
                             if (credentialResponse.credential) {
-                                await login(credentialResponse.credential);
-                                if (onClose) onClose();
+                                try {
+                                    await login(credentialResponse.credential);
+                                    if (onClose) onClose();
+                                } catch (error) {
+                                    console.error("Login Error:", error);
+                                    alert("Login Failed. Please check if your Backend URL is configured correctly in Vercel.");
+                                }
                             }
                         }}
                         onError={() => {
                             console.log('Login Failed');
+                            alert("Google Login Failed. Please try again.");
                         }}
                         theme="filled_black"
                         size="large"
@@ -40,6 +46,10 @@ const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onClose, message }) => 
                 <p className="text-xs text-gray-500">
                     By signing in, you receive <b>10 FREE Credits</b> to start generating videos!
                 </p>
+                
+                <button onClick={onClose} className="mt-6 text-xs text-gray-600 hover:text-gray-400 underline">
+                    Close Window
+                </button>
             </div>
         </div>
     );
