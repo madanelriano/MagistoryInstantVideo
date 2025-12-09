@@ -3,7 +3,9 @@ import { OAuth2Client } from 'google-auth-library';
 import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 
-const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+// Safely initialize OAuth Client
+const clientId = process.env.GOOGLE_CLIENT_ID || '';
+const client = new OAuth2Client(clientId);
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key';
 
 // --- DB Abstraction for Fallback ---
@@ -14,7 +16,11 @@ try {
     if (process.env.DATABASE_URL) {
         prismaInstance = new PrismaClient();
     } else {
-        console.warn("WARN: DATABASE_URL not set. Using in-memory storage. Data will be lost on restart.");
+        console.log("----------------------------------------------------------------");
+        console.log("NOTICE: DATABASE_URL is not set.");
+        console.log("App is running in IN-MEMORY MODE.");
+        console.log("User data will be lost when the server restarts.");
+        console.log("----------------------------------------------------------------");
     }
 } catch (e) {
     console.error("Failed to initialize PrismaClient", e);
@@ -60,9 +66,12 @@ export const db = {
 };
 
 export const verifyGoogleToken = async (token: string) => {
+  if (!clientId) {
+      throw new Error("GOOGLE_CLIENT_ID is not configured on the server.");
+  }
   const ticket = await client.verifyIdToken({
       idToken: token,
-      audience: process.env.GOOGLE_CLIENT_ID,
+      audience: clientId,
   });
   return ticket.getPayload();
 };
