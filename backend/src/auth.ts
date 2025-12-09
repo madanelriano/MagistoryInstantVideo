@@ -22,22 +22,25 @@ try {
 
 export const db = {
     user: {
-        findUnique: async (args: { where: { id?: string; email?: string } }) => {
-            if (prismaInstance) return prismaInstance.user.findUnique(args);
+        // Fix: Use 'any' for where clause to avoid TS strict type mismatch with generated Prisma Client
+        findUnique: async (args: { where: any }) => {
+            if (prismaInstance) return prismaInstance.user.findUnique(args as any);
+            
             return memoryUsers.find(u => 
                 (args.where.id && u.id === args.where.id) || 
-                (args.where.email && u.email === args.where.email)
+                (args.where.email && u.email === args.where.email) ||
+                (args.where.googleId && u.googleId === args.where.googleId)
             ) || null;
         },
         create: async (args: { data: any }) => {
-            if (prismaInstance) return prismaInstance.user.create(args);
+            if (prismaInstance) return prismaInstance.user.create(args as any);
             // Mock ID generation
             const newUser = { id: `user-${Date.now()}-${Math.floor(Math.random() * 1000)}`, ...args.data };
             memoryUsers.push(newUser);
             return newUser;
         },
         update: async (args: { where: { id: string }, data: any }) => {
-            if (prismaInstance) return prismaInstance.user.update(args);
+            if (prismaInstance) return prismaInstance.user.update(args as any);
             const idx = memoryUsers.findIndex(u => u.id === args.where.id);
             if (idx === -1) throw new Error("User not found");
             
@@ -50,14 +53,11 @@ export const db = {
                 user.credits = args.data.credits;
             }
             
-            // Handle other fields if necessary (none used currently except credits)
-            
             memoryUsers[idx] = user;
             return user;
         }
     }
 };
-// -----------------------------------
 
 export const verifyGoogleToken = async (token: string) => {
   const ticket = await client.verifyIdToken({
