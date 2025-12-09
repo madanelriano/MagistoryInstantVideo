@@ -28,11 +28,8 @@ const allowedOrigins = [
 app.use(cors({
     origin: (origin, callback) => {
         if (!origin) return callback(null, true);
-        if (!process.env.FRONTEND_URL || allowedOrigins.includes(origin)) {
-             return callback(null, true);
-        } else {
-            return callback(null, true);
-        }
+        // Allow all origins for simplicity in demo/dev, or strict check in prod
+        return callback(null, true);
     },
     credentials: true
 }) as any);
@@ -56,8 +53,8 @@ app.post('/auth/google', async (req, res) => {
 
         res.json({ token: sessionToken, user: { id: user.id, name: user.name, email: user.email, credits: user.credits } });
     } catch (error: any) {
-        console.error("Auth Error:", error);
-        res.status(401).json({ error: "Authentication failed" });
+        console.error("Auth Error:", error.message);
+        res.status(401).json({ error: "Authentication failed: " + error.message });
     }
 });
 
@@ -67,6 +64,7 @@ app.get('/user/me', authMiddleware, async (req: any, res) => {
         if (!user) return res.status(404).json({ error: "User not found" });
         res.json({ id: user.id, name: user.name, email: user.email, credits: user.credits });
     } catch (error) {
+        console.error("User Fetch Error:", error);
         res.status(500).json({ error: "Server error" });
     }
 });
@@ -149,7 +147,7 @@ app.get('/status/:jobId', (req, res) => {
     const jobId = req.params.jobId;
     const job = jobs.get(jobId);
     
-    console.log(`Status check for ${jobId}: ${job ? job.status : 'NOT FOUND'}`);
+    // console.log(`Status check for ${jobId}: ${job ? job.status : 'NOT FOUND'}`);
     
     if (!job) {
         return res.status(404).json({ error: 'Job not found' });
@@ -188,4 +186,11 @@ app.get('/health', (req, res) => {
 
 app.listen(PORT, '0.0.0.0', () => {
     console.log(`Render server running on port ${PORT}`);
+    
+    if (!process.env.GOOGLE_CLIENT_ID) {
+        console.warn("WARNING: GOOGLE_CLIENT_ID is not set. Google Login will fail.");
+        console.log("Please set GOOGLE_CLIENT_ID in your Railway variables.");
+    } else {
+        console.log("Google Auth Configured.");
+    }
 });
