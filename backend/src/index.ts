@@ -1,4 +1,3 @@
-
 import express from 'express';
 import cors from 'cors';
 import { renderVideo } from './renderer';
@@ -16,7 +15,7 @@ const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3001;
 
 // Increase limit for uploads
-app.use(express.json({ limit: '500mb' }));
+app.use(express.json({ limit: '500mb' }) as any);
 
 // CORS Configuration
 const allowedOrigins = [

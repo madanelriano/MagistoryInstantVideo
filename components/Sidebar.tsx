@@ -12,7 +12,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab }) => {
     { id: 'media', icon: <MediaIcon />, label: 'Media' },
     { id: 'audio', icon: <MusicIcon />, label: 'Audio' },
     { id: 'text', icon: <TextIcon />, label: 'Text' },
-    { id: 'ai', icon: <MagicWandIcon />, label: 'AI Tools' },
   ];
 
   return (

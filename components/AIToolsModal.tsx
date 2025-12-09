@@ -20,7 +20,7 @@ interface AIToolsModalProps {
   onClose: () => void;
   segment: Segment;
   activeClipId: string;
-  onUpdateMedia: (newUrl: string) => void;
+  onUpdateMedia: (newUrl: string, type: 'image' | 'video') => void;
   onUpdateAudio: (newUrl: string, duration?: number) => void;
   initialTab?: AIToolTab;
   onGenerateAllNarrations?: () => Promise<void>;
@@ -80,7 +80,7 @@ const TabButton: React.FC<{name: string, tab: AIToolTab, activeTab: AIToolTab, s
 );
 
 // --- Generate Image Tab ---
-const GenerateImageTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string) => void; onClose: () => void; }> = ({ segment, onUpdateMedia, onClose }) => {
+const GenerateImageTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string, type: 'image' | 'video') => void; onClose: () => void; }> = ({ segment, onUpdateMedia, onClose }) => {
     const [prompt, setPrompt] = useState(segment.search_keywords_for_media);
     const [isLoading, setIsLoading] = useState(false);
     const [result, setResult] = useState<string | null>(null);
@@ -124,7 +124,7 @@ const GenerateImageTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string
                 {result && <img src={result} className="w-full h-full object-contain" />}
             </div>
             {result && (
-                 <button onClick={() => { onUpdateMedia(result); onClose(); }} className="mt-4 w-full px-6 py-3 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700">
+                 <button onClick={() => { onUpdateMedia(result, 'image'); onClose(); }} className="mt-4 w-full px-6 py-3 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700">
                     Use This Image
                 </button>
             )}
@@ -133,7 +133,7 @@ const GenerateImageTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string
 };
 
 // --- Edit Image Tab ---
-const EditImageTab: React.FC<{ mediaUrl: string; onUpdateMedia: (url: string) => void; onClose: () => void; }> = ({ mediaUrl, onUpdateMedia, onClose }) => {
+const EditImageTab: React.FC<{ mediaUrl: string; onUpdateMedia: (url: string, type: 'image' | 'video') => void; onClose: () => void; }> = ({ mediaUrl, onUpdateMedia, onClose }) => {
     // Edit also consumes 1 credit
     const { deductCredits } = useAuth();
     const [prompt, setPrompt] = useState('');
@@ -170,13 +170,23 @@ const EditImageTab: React.FC<{ mediaUrl: string; onUpdateMedia: (url: string) =>
                 </button>
             </div>
              {/* ... */}
+             <div className="w-full aspect-video bg-gray-900 rounded-md flex items-center justify-center border border-gray-700">
+                {isLoading && <LoadingSpinner />}
+                {!isLoading && !result && <p className="text-gray-600 text-sm">Edited image will appear here</p>}
+                {result && <img src={result} className="w-full h-full object-contain" />}
+            </div>
+            {result && (
+                 <button onClick={() => { onUpdateMedia(result, 'image'); onClose(); }} className="mt-4 w-full px-6 py-3 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700">
+                    Use This Version
+                </button>
+            )}
         </div>
     );
 };
 
 
 // --- Generate Video Tab ---
-const GenerateVideoTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string) => void; onClose: () => void; }> = ({ segment, onUpdateMedia, onClose }) => {
+const GenerateVideoTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string, type: 'image' | 'video') => void; onClose: () => void; }> = ({ segment, onUpdateMedia, onClose }) => {
     const { deductCredits } = useAuth();
     const [prompt, setPrompt] = useState(segment.narration_text);
     const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16'>('16:9');
@@ -217,6 +227,11 @@ const GenerateVideoTab: React.FC<{ segment: Segment; onUpdateMedia: (url: string
                     {isLoading && <LoadingSpinner />} Generate (2 Cr)
                 </button>
              {/* ... */}
+             {result && (
+                 <button onClick={() => { onUpdateMedia(result, 'video'); onClose(); }} className="mt-4 w-full px-6 py-3 bg-green-600 text-white font-semibold rounded-md hover:bg-green-700">
+                    Use This Video
+                </button>
+            )}
         </div>
     );
 };
@@ -256,26 +271,66 @@ const TextToSpeechTab: React.FC<{ segment: Segment; onUpdateAudio: (url: string,
 
     const handleGenerateAll = async () => {
         if (!onGenerateAllNarrations) return;
-        // Batch cost logic would be complex. For now, assume user has enough or handle per-item in parent?
-        // Better: Calculate total estimate here.
-        // Alert user this might consume many credits.
-        const confirm = window.confirm("Generating all narrations may consume significant credits. Continue?");
+        
+        // In a real app, calculate cost here. For now, prompt user.
+        const confirm = window.confirm("This will automatically generate narrations for ALL scenes without audio.\n\nNote: This process uses AI credits per scene.");
         if(!confirm) return;
 
-        // Since parent handles loop, we rely on parent to check/deduct or deduct here one bulk amount?
-        // Simplest: Parent function should have access to deductCredits.
-        // For this snippet, we just trigger it.
         await onGenerateAllNarrations();
     }
 
-    // ... UI ...
     return (
-        <div>
-             {/* ... */}
-            <button onClick={handleGenerate} disabled={isLoading || !segment.narration_text} className="w-full px-6 py-3 bg-purple-600 text-white font-semibold rounded-md flex items-center justify-center gap-2">
-                {isLoading && <LoadingSpinner />} Generate Audio (~1-2 Cr)
-            </button>
-             {/* ... */}
+        <div className="space-y-6">
+            <div className="bg-gray-700/50 p-4 rounded-lg border border-gray-600">
+                <h3 className="text-gray-200 font-bold mb-2 flex items-center gap-2">
+                    <MagicWandIcon className="w-5 h-5 text-purple-400"/> Current Scene Audio
+                </h3>
+                <p className="text-sm text-gray-400 mb-4">Generate a high-quality AI voiceover for the current selected scene.</p>
+                <button onClick={handleGenerate} disabled={isLoading || !segment.narration_text} className="w-full px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white font-semibold rounded-md flex items-center justify-center gap-2 transition-colors disabled:opacity-50">
+                    {isLoading && <LoadingSpinner />} Generate Single Voice (1 Cr)
+                </button>
+                {error && <p className="text-red-400 text-sm mt-2">{error}</p>}
+            </div>
+
+            {/* Bulk Generation Section */}
+            <div className="border-t border-gray-700 pt-6">
+                <h3 className="text-sm font-bold text-gray-300 mb-3 uppercase flex items-center gap-2">
+                    Bulk Actions
+                </h3>
+                
+                {generationProgress ? (
+                    <div className="bg-gray-900 p-4 rounded-lg border border-purple-500/50 shadow-lg relative overflow-hidden">
+                        <div className="absolute inset-0 bg-purple-900/10 animate-pulse"></div>
+                        <div className="relative z-10">
+                            <div className="flex justify-between text-xs font-bold mb-2">
+                                <span className="text-purple-300 animate-pulse">Generating Scenes...</span>
+                                <span className="text-white">{generationProgress.current} / {generationProgress.total}</span>
+                            </div>
+                            <div className="w-full bg-gray-700 h-2.5 rounded-full overflow-hidden">
+                                <div 
+                                    className="bg-gradient-to-r from-purple-500 to-pink-500 h-full transition-all duration-300 ease-out" 
+                                    style={{ width: `${(generationProgress.current / generationProgress.total) * 100}%` }}
+                                />
+                            </div>
+                            <p className="text-[10px] text-gray-500 mt-2 text-center">Please wait while we create audio for all segments.</p>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700">
+                        <p className="text-xs text-gray-400 mb-3">
+                            Automatically generate AI voiceovers for all segments that have text but no audio.
+                        </p>
+                        <button 
+                            onClick={handleGenerateAll}
+                            disabled={!onGenerateAllNarrations}
+                            className="w-full py-3 bg-gray-700 hover:bg-purple-900/30 hover:border-purple-500 border border-gray-600 text-gray-200 hover:text-white font-semibold rounded-md transition-all flex items-center justify-center gap-2 group"
+                        >
+                            <MagicWandIcon className="w-4 h-4 group-hover:text-purple-400 transition-colors" />
+                            Generate All Voices (Auto-Detect)
+                        </button>
+                    </div>
+                )}
+            </div>
         </div>
     );
 };
