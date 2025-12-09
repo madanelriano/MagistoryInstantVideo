@@ -29,15 +29,14 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
         CRITICAL INSTRUCTION FOR SEGMENTATION:
         1. **1 Visual Keyword = 1 Segment**: You MUST create a separate segment for EVERY distinct visual subject.
         2. **Split Narration Exactly**: Break the narration text so it aligns perfectly with the visual.
-        3. **Visual Search Phrase**: The 'search_keywords_for_media' must be strictly **2 words** (Subject + Context).
-           - INVALID: "happiness" (too short), "business team meeting office" (too long), "a cat" (filler words).
-           - VALID: "business meeting", "running dog", "storm clouds", "cooking steak", "office working".
+        3. **Visual Search Phrase (MOST IMPORTANT)**: The 'search_keywords_for_media' must be a CONCRETE, LITERAL description of a stock video clip.
+           - DO NOT use abstract concepts (e.g., "Success", "History", "Thoughts").
+           - DO NOT use complex scenes (e.g., "George Washington signing the declaration in a room").
+           - DO USE simple stock terms: "Business meeting", "Hiker on mountain", "Writing with quill pen", "Storm clouds", "Chef cooking".
+           - Think: "What would I type into Pexels or Shutterstock to find this exact shot?"
         4. **No Generic Segments**: Every segment must have a specific visual focus matching the narration.
         5. **Music Theme**: Suggest "background_music_keywords" (3-5 words) that describe the perfect background track. Include Genre, Mood, and Tempo. Use Pixabay-friendly terms.
-           - Examples: "Cinematic Ambient Piano", "Upbeat Corporate Pop", "Epic Orchestral Heroic", "Lo-fi Hip Hop Chill".
         6. **Sound Effects**: For segments that depict specific actions or environments, provide "sfx_keywords".
-           - Examples: "ocean waves", "camera shutter", "city traffic", "keyboard typing", "whoosh".
-           - Leave empty if no specific sound effect is needed.
         
         The goal is a fast-paced, visually accurate video where the image changes exactly when the subject in the narration changes.`,
         config: {
@@ -65,7 +64,7 @@ export async function generateVideoScript(topic: string, requestedDuration: stri
                                 },
                                 search_keywords_for_media: { 
                                     type: Type.STRING,
-                                    description: "A strictly 2-word search phrase (Subject + Context) for finding stock footage."
+                                    description: "A specific 2-3 word search phrase for stock footage (Concrete Noun + Action)."
                                 },
                                 duration: {
                                     type: Type.INTEGER,
@@ -265,25 +264,31 @@ export async function suggestMediaKeywords(narrationText: string, videoContext?:
   try {
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
-      contents: `Based on the following narration text for a video segment, suggest 5 to 7 visually descriptive search phrases for stock footage (Pexels). 
+      contents: `You are a Stock Footage Search Engine Expert.
+      
+      Task: Convert the following narration text into highly effective search queries for Pexels/Pixabay/Shutterstock.
       ${contextPrompt}
+      Narration: "${narrationText}"
       
-      Rules:
-      1. Each phrase should be strictly **2 words** (Subject + Context).
-      2. Ensure the visual style aligns with the overall video topic.
-      3. Focus on visible elements.
-      4. Avoid abstract words like "concept" or "success".
-      5. Provide ONLY a comma-separated list.
+      Instructions:
+      1. IGNORE abstract concepts (e.g., "journey", "success", "future").
+      2. EXTRACT concrete, visual subjects and actions.
+      3. Format output as a comma-separated list of 3 DISTINCT search phrases.
       
-      Narration: "${narrationText}"`,
+      Examples:
+      - Narration: "Our company is reaching new heights." -> Output: Hiker on mountain top, Modern skyscraper looking up, Business team high five
+      - Narration: "The mind is a complex web of thoughts." -> Output: Neural network animation, Glowing fiber optics, Abstract brain lights
+      - Narration: "He cooked a delicious meal." -> Output: Chef cooking steak, Sizzling pan close up, Family eating dinner
+      
+      Output ONLY the comma-separated list. No explanations.
+      `,
       config: {
-        temperature: 0.7,
+        temperature: 0.5,
       }
     });
     return response.text.trim().replace(/"/g, '');
   } catch (error) {
     console.error('Error calling Gemini API for keyword suggestion:', error);
-    // Don't throw here, just return empty so UI doesn't break
     return "";
   }
 }

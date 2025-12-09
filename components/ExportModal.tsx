@@ -16,8 +16,8 @@ interface ExportModalProps {
 type ExportStatus = 'idle' | 'preparing' | 'sending' | 'rendering' | 'complete' | 'error';
 type ExportQuality = '360p' | '720p' | '1080p';
 
-// Default from env, but can be overridden by user in UI
-const DEFAULT_BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
+// Default from env
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3001';
 
 const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segments, audioTracks = [] }) => {
     const [status, setStatus] = useState<ExportStatus>('idle');
@@ -26,9 +26,6 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
     const [error, setError] = useState('');
     const [quality, setQuality] = useState<ExportQuality>('720p');
     
-    // Allow user to edit the URL if connection fails
-    const [currentBackendUrl, setCurrentBackendUrl] = useState(DEFAULT_BACKEND_URL);
-
     // Poll interval ref
     const pollIntervalRef = useRef<any>(null);
     // Track consecutive errors to prevent infinite loops on network failure
@@ -118,7 +115,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
         if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
 
         // Remove trailing slash if present
-        const sanitizedUrl = currentBackendUrl.replace(/\/$/, '');
+        const sanitizedUrl = BACKEND_URL.replace(/\/$/, '');
 
         try {
             const payload = await preparePayload();
@@ -211,7 +208,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                         consecutiveErrorsRef.current++;
                         if (consecutiveErrorsRef.current > 5) {
                             clearInterval(pollIntervalRef.current);
-                            setError("Connection to server lost. Check your network or server URL. (Mixed Content Error?)");
+                            setError("Connection to server lost. Check your network.");
                             setStatus('error');
                             return;
                         }
@@ -269,18 +266,11 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                              </div>
                          </div>
 
-                         <div className="bg-purple-900/20 border border-purple-500/30 p-4 rounded-md text-left">
-                            <p className="text-gray-200 mb-2 text-sm">
+                         <div className="bg-purple-900/20 border border-purple-500/30 p-4 rounded-md text-left flex items-center gap-3">
+                            <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse shadow-[0_0_8px_rgba(74,222,128,0.6)]"></div>
+                            <p className="text-gray-200 text-sm">
                                 Rendering will be performed on the <b>Cloud Server</b>.
                             </p>
-                            <label className="text-[10px] text-gray-400 font-bold block mb-1 uppercase">Render Server URL</label>
-                            <input 
-                                type="text" 
-                                value={currentBackendUrl}
-                                onChange={(e) => setCurrentBackendUrl(e.target.value)}
-                                className="w-full bg-gray-900 border border-gray-600 rounded p-2 text-xs text-gray-300 focus:border-purple-500 outline-none"
-                                placeholder="https://your-project.up.railway.app"
-                            />
                         </div>
                         <button 
                             onClick={handleStartExport} 
@@ -320,19 +310,6 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                         <div className="bg-red-900/20 p-4 rounded-md mb-6 border border-red-900/50">
                             <h3 className="text-red-400 font-bold mb-1">Export Failed</h3>
                             <p className="text-red-300 text-sm mb-4 break-words">{error}</p>
-                            
-                            <div className="text-left">
-                                <label className="text-xs text-red-300 font-bold block mb-1">Verify Server URL:</label>
-                                <input 
-                                    type="text" 
-                                    value={currentBackendUrl}
-                                    onChange={(e) => setCurrentBackendUrl(e.target.value)}
-                                    className="w-full bg-gray-900 border border-red-500/50 rounded p-2 text-sm text-gray-300 focus:border-red-500 outline-none"
-                                />
-                                <p className="text-[10px] text-gray-400 mt-1">
-                                    Check Railway Dashboard for the correct "Public Domain" (e.g., https://xxx.up.railway.app)
-                                </p>
-                            </div>
                         </div>
                         <button onClick={handleStartExport} className="w-full py-3 bg-gray-700 hover:bg-gray-600 rounded-md text-white font-semibold">
                             Try Again

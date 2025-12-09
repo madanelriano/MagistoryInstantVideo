@@ -1,7 +1,7 @@
 
 import React from 'react';
-import type { Segment, TextOverlayStyle } from '../types';
-import { MediaIcon, TextIcon, MusicIcon, EffectsIcon, MagicWandIcon, TrashIcon, ScissorsIcon, VolumeXIcon, LayersIcon, StyleIcon, BackArrowIcon } from './icons';
+import type { Segment, TextOverlayStyle, TransitionEffect } from '../types';
+import { MediaIcon, TextIcon, MusicIcon, EffectsIcon, MagicWandIcon, TrashIcon, ScissorsIcon, VolumeXIcon, LayersIcon, StyleIcon, BackArrowIcon, TransitionIcon } from './icons';
 
 interface ToolbarProps {
     activeMenu: string | null;
@@ -16,6 +16,7 @@ interface ToolbarProps {
     onUpdateText: (id: string, text: string) => void;
     onAutoCaptions: () => void;
     onUpdateStyle: (id: string, style: Partial<TextOverlayStyle>) => void;
+    onApplyTransitionToAll: (transition: TransitionEffect | 'random') => void;
 }
 
 const ToolButton: React.FC<{ icon: React.ReactNode; label: string; onClick?: () => void; isActive?: boolean }> = ({ icon, label, onClick, isActive }) => (
@@ -30,7 +31,8 @@ const ToolButton: React.FC<{ icon: React.ReactNode; label: string; onClick?: () 
 
 const Toolbar: React.FC<ToolbarProps> = ({ 
     activeMenu, setActiveMenu, onOpenMediaSearch, onOpenAudioModal, onOpenAITools, 
-    onSplit, onDelete, activeSegment, onUpdateVolume, onUpdateText, onAutoCaptions, onUpdateStyle
+    onSplit, onDelete, activeSegment, onUpdateVolume, onUpdateText, onAutoCaptions, onUpdateStyle,
+    onApplyTransitionToAll
 }) => {
 
   // --- SUB-MENUS ---
@@ -88,13 +90,27 @@ const Toolbar: React.FC<ToolbarProps> = ({
       )
   }
 
+  // TRANSITIONS MENU
+  if (activeMenu === 'transitions') {
+      return (
+          <div className="flex items-center h-full px-4 gap-6 overflow-x-auto bg-[#111]">
+              <button onClick={() => setActiveMenu(null)} className="mr-2 text-gray-400 hover:text-white"><BackArrowIcon /></button>
+              <ToolButton icon={<MagicWandIcon className="text-purple-400" />} label="Randomize" onClick={() => onApplyTransitionToAll('random')} />
+              <div className="w-px h-8 bg-gray-800 mx-2"></div>
+              <ToolButton icon={<TransitionIcon />} label="Fade All" onClick={() => onApplyTransitionToAll('fade')} />
+              <ToolButton icon={<TransitionIcon />} label="Slide All" onClick={() => onApplyTransitionToAll('slide')} />
+              <ToolButton icon={<TransitionIcon />} label="Zoom All" onClick={() => onApplyTransitionToAll('zoom')} />
+          </div>
+      )
+  }
+
   // MAIN MENU (Default)
   return (
     <div className="flex items-center justify-between md:justify-center h-full px-4 gap-2 md:gap-8 overflow-x-auto">
         <ToolButton icon={<ScissorsIcon />} label="Edit" onClick={() => setActiveMenu('edit')} />
         <ToolButton icon={<MusicIcon />} label="Audio" onClick={() => setActiveMenu('audio')} />
         <ToolButton icon={<TextIcon />} label="Text" onClick={() => setActiveMenu('text')} />
-        <ToolButton icon={<EffectsIcon />} label="Effects" onClick={() => alert("Effects coming soon")} />
+        <ToolButton icon={<TransitionIcon />} label="Transitions" onClick={() => setActiveMenu('transitions')} />
         <ToolButton icon={<LayersIcon />} label="Overlay" onClick={onOpenMediaSearch} />
         <ToolButton icon={<MagicWandIcon className="text-purple-400" />} label="AI Tools" onClick={onOpenAITools} />
     </div>

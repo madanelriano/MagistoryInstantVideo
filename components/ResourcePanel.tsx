@@ -1,14 +1,9 @@
 
-
-
-
-
-
-
 import React, { useState, useEffect, useRef } from 'react';
 import { searchPixabayAudio } from '../services/pixabayService';
 import { searchPexelsPhotos, searchPexelsVideos } from '../services/pexelsService';
-import { MagicWandIcon, PlayIcon, MusicIcon, TextIcon, SearchIcon, ExportIcon, VolumeXIcon, EditIcon, MediaIcon, EffectsIcon } from './icons';
+import { suggestMediaKeywords } from '../services/geminiService';
+import { MagicWandIcon, PlayIcon, MusicIcon, TextIcon, SearchIcon, ExportIcon, VolumeXIcon, EditIcon } from './icons';
 import LoadingSpinner from './LoadingSpinner';
 import { getCachedMediaUrl } from '../utils/cache';
 import type { Segment, AIToolTab } from '../types';
@@ -45,20 +40,34 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Active Segment for context-aware search
+  const activeSegment = segments?.find(s => s.id === activeSegmentId);
+
   useEffect(() => {
     setResults([]);
-    setQuery('');
-    if (activeTab === 'media') {
-        setMediaSource('stock');
-        setStockMediaType('all');
-        handleSearch('business');
-    }
+    // Do NOT clear query here blindly to allow context persistence
     if (activeTab === 'audio') {
         // Respect initial type if provided
         if (initialAudioType) setAudioSearchType(initialAudioType);
         handleSearch(initialAudioType === 'sfx' ? 'whoosh' : 'cinematic');
     }
   }, [activeTab, initialAudioType]);
+
+  // Context-Aware Auto-Search: When segment changes, update search to match
+  useEffect(() => {
+    if (activeTab === 'media' && activeSegment) {
+       const keywords = activeSegment.search_keywords_for_media;
+       // Only update if keywords exist and aren't generic placeholder
+       if (keywords && keywords !== 'placeholder' && keywords !== query) {
+           setQuery(keywords);
+           handleSearch(keywords);
+       } else if (!query) {
+           // Fallback default if empty
+           setQuery('');
+           handleSearch('business');
+       }
+    }
+  }, [activeSegmentId, activeTab]); 
 
   // Re-search when switching audio type or stock media type
   useEffect(() => {
@@ -108,6 +117,24 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleMagicSearch = async () => {
+      if (!activeSegment?.narration_text) return;
+      setIsLoading(true);
+      try {
+          const suggestions = await suggestMediaKeywords(activeSegment.narration_text);
+          // Get the first best suggestion
+          const bestKeyword = suggestions.split(',')[0].trim();
+          if (bestKeyword) {
+              setQuery(bestKeyword);
+              handleSearch(bestKeyword);
+          }
+      } catch (e) {
+          console.error("Magic search failed", e);
+      } finally {
+          setIsLoading(false);
+      }
   };
 
   const handleMediaSelect = async (item: any) => {
@@ -244,54 +271,6 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
     );
   }
 
-  if (activeTab === 'ai') {
-      return (
-        <div className="flex-1 flex flex-col h-full bg-[#1e1e1e]">
-            <div className="p-4 border-b border-black/50">
-                <h3 className="font-bold text-gray-200 text-sm">AI Tools</h3>
-                <p className="text-[10px] text-gray-500 mt-1">Select a tool to enhance your video.</p>
-            </div>
-            <div className="p-4 grid gap-3 overflow-y-auto custom-scrollbar">
-                
-                <AIToolCard 
-                    icon={<MagicWandIcon className="w-6 h-6 text-purple-400" />}
-                    title="Text to Speech"
-                    desc="Generate professional voiceovers from your script."
-                    onClick={() => onOpenAITools('tts')}
-                />
-                
-                <AIToolCard 
-                    icon={<EditIcon className="w-6 h-6 text-blue-400" />}
-                    title="Edit Image"
-                    desc="Enhance, recolor, or modify existing images with AI."
-                    onClick={() => onOpenAITools('edit-image')}
-                />
-
-                <AIToolCard 
-                    icon={<MediaIcon className="w-6 h-6 text-pink-400" />}
-                    title="Generate Image"
-                    desc="Create unique images from text descriptions."
-                    onClick={() => onOpenAITools('generate-image')}
-                />
-
-                 <AIToolCard 
-                    icon={<EffectsIcon className="w-6 h-6 text-green-400" />}
-                    title="Generate Video"
-                    desc="Turn text prompts into short video clips using Veo."
-                    onClick={() => onOpenAITools('generate-video')}
-                />
-
-                <AIToolCard 
-                    icon={<VolumeXIcon className="w-6 h-6 text-orange-400" />}
-                    title="Generate SFX"
-                    desc="Create sound effects based on segment context."
-                    onClick={() => onOpenAITools('generate-sfx')}
-                />
-            </div>
-        </div>
-      )
-  }
-
   // Helper to check if search should be visible
   const showSearch = (activeTab === 'media' && mediaSource === 'stock') || activeTab === 'audio';
 
@@ -338,16 +317,30 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
 
         {/* Search Bar */}
         {showSearch && (
-            <div className="relative mb-2">
-                <input
-                    type="text"
-                    className="w-full bg-[#121212] border border-gray-700 rounded-md py-2 pl-9 pr-3 text-xs text-white focus:outline-none focus:border-purple-500 placeholder-gray-500 transition-colors"
-                    placeholder={getSearchPlaceholder()}
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                />
-                <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+            <div className="flex gap-2 mb-2">
+                <div className="relative flex-grow">
+                    <input
+                        type="text"
+                        className="w-full bg-[#121212] border border-gray-700 rounded-md py-2 pl-9 pr-3 text-xs text-white focus:outline-none focus:border-purple-500 placeholder-gray-500 transition-colors"
+                        placeholder={getSearchPlaceholder()}
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                    />
+                    <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-500" />
+                </div>
+                
+                {/* AI Magic Search Button */}
+                {activeTab === 'media' && activeSegment?.narration_text && (
+                    <button
+                        onClick={handleMagicSearch}
+                        disabled={isLoading}
+                        className="px-3 bg-gradient-to-br from-purple-600 to-blue-600 text-white rounded-md hover:opacity-90 transition-opacity border border-white/10 shadow-lg flex items-center justify-center"
+                        title="Analyze narration and suggest better search terms"
+                    >
+                         {isLoading ? <LoadingSpinner /> : <MagicWandIcon className="w-4 h-4" />}
+                    </button>
+                )}
             </div>
         )}
         
@@ -522,20 +515,5 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
     </div>
   );
 };
-
-const AIToolCard: React.FC<{ icon: React.ReactNode, title: string, desc: string, onClick: () => void }> = ({ icon, title, desc, onClick }) => (
-    <button 
-        onClick={onClick}
-        className="flex items-start gap-3 p-3 bg-[#252525] hover:bg-[#2a2a2a] border border-gray-700 hover:border-purple-500/50 rounded-lg transition-all text-left group"
-    >
-        <div className="p-2 bg-gray-800 rounded-md group-hover:bg-purple-900/30 transition-colors">
-            {icon}
-        </div>
-        <div>
-            <h4 className="font-bold text-gray-200 text-sm mb-1">{title}</h4>
-            <p className="text-[10px] text-gray-400 leading-tight">{desc}</p>
-        </div>
-    </button>
-)
 
 export default ResourcePanel;

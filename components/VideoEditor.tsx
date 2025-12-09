@@ -10,6 +10,7 @@ import ExportModal from './ExportModal';
 import { UndoIcon, RedoIcon, ExportIcon, MediaIcon, MusicIcon, TextIcon, MagicWandIcon, ChevronLeftIcon } from './icons';
 import { estimateWordTimings, getAudioDuration, createWavBlobUrl } from '../utils/media';
 import { generateSpeechFromText } from '../services/geminiService';
+import Toolbar from './Toolbar';
 
 interface VideoEditorProps {
   initialScript: VideoScript;
@@ -47,6 +48,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   const [isResourcePanelOpen, setIsResourcePanelOpen] = useState(false);
   const [activeSegmentId, setActiveSegmentId] = useState<string | null>(segments[0]?.id || null);
   const [activeAudioTrackId, setActiveAudioTrackId] = useState<string | null>(null);
+  const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [timelineZoom, setTimelineZoom] = useState(1);
   const [isExportOpen, setIsExportOpen] = useState(false);
   const [isAIToolsOpen, setIsAIToolsOpen] = useState(false);
@@ -322,6 +324,16 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
     updateSegments(prev => prev.map(s => s.id === segmentId ? { ...s, transition: newTransition } : s));
   }, [updateSegments]);
 
+  const handleApplyTransitionToAll = useCallback((transitionType: TransitionEffect | 'random') => {
+      const transitions: TransitionEffect[] = ['fade', 'slide', 'zoom'];
+      updateSegments(prev => prev.map(s => ({
+          ...s,
+          transition: transitionType === 'random' 
+            ? transitions[Math.floor(Math.random() * transitions.length)] 
+            : transitionType
+      })));
+  }, [updateSegments]);
+
   const handleUpdateSegmentTextOverlayStyle = useCallback((segmentId: string, styleUpdate: Partial<TextOverlayStyle>) => {
     updateSegments(prev => prev.map(s => s.id === segmentId ? { ...s, textOverlayStyle: { ...s.textOverlayStyle!, ...styleUpdate } } : s));
   }, [updateSegments]);
@@ -412,6 +424,8 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   };
   
   const handleOpenAITools = useCallback((tab: AIToolTab = 'edit-image') => {
+      // Explicitly close the Resource Panel ("AI Library") when opening AI Tools Modal
+      setIsResourcePanelOpen(false);
       setAiToolsInitialTab(tab);
       setIsAIToolsOpen(true);
   }, []);
@@ -531,20 +545,44 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                 )}
              </div>
 
-             {/* PROPERTIES PANEL */}
+             {/* PROPERTIES PANEL - Middle strip above timeline */}
              <div className="flex-shrink-0 z-30 bg-[#1e1e1e] border-t border-b border-black/50 shadow-[0_-5px_15px_rgba(0,0,0,0.3)]">
-                 <PropertiesPanel 
-                    segment={activeSegment}
-                    audioTrack={activeAudioTrack}
-                    onUpdateAudioTrack={handleUpdateAudioTrack}
-                    onDeleteAudioTrack={handleDeleteAudioTrack}
-                    onUpdateVolume={handleUpdateSegmentVolume}
-                    onUpdateText={handleUpdateSegmentText}
-                    onUpdateStyle={handleUpdateSegmentTextOverlayStyle}
-                    onUpdateTransition={handleUpdateSegmentTransition}
-                    onDelete={handleDeleteSegment}
-                    onOpenAITools={() => handleOpenAITools()}
-                 />
+                 <div className="flex flex-col md:flex-row">
+                     {/* Toolbar Area */}
+                     <div className="flex-grow border-b md:border-b-0 md:border-r border-white/5 overflow-x-auto">
+                        <Toolbar 
+                            activeMenu={activeMenu}
+                            setActiveMenu={setActiveMenu}
+                            onOpenMediaSearch={() => { setActiveResourceTab('media'); setIsResourcePanelOpen(true); }}
+                            onOpenAudioModal={(type) => { setResourceAudioType(type); setActiveResourceTab('audio'); setIsResourcePanelOpen(true); }}
+                            onOpenAITools={() => handleOpenAITools()}
+                            onSplit={handleSplitActiveSegment}
+                            onDelete={handleDeleteSegment}
+                            activeSegment={activeSegment}
+                            onUpdateVolume={handleUpdateSegmentVolume}
+                            onUpdateText={handleUpdateSegmentText}
+                            onAutoCaptions={handleAutoCaptions}
+                            onUpdateStyle={handleUpdateSegmentTextOverlayStyle}
+                            onApplyTransitionToAll={handleApplyTransitionToAll}
+                        />
+                     </div>
+                     
+                     {/* Segment Properties Area */}
+                     <div className="flex-shrink-0 min-w-0">
+                         <PropertiesPanel 
+                            segment={activeSegment}
+                            audioTrack={activeAudioTrack}
+                            onUpdateAudioTrack={handleUpdateAudioTrack}
+                            onDeleteAudioTrack={handleDeleteAudioTrack}
+                            onUpdateVolume={handleUpdateSegmentVolume}
+                            onUpdateText={handleUpdateSegmentText}
+                            onUpdateStyle={handleUpdateSegmentTextOverlayStyle}
+                            onUpdateTransition={handleUpdateSegmentTransition}
+                            onDelete={handleDeleteSegment}
+                            onOpenAITools={() => handleOpenAITools()}
+                         />
+                     </div>
+                 </div>
              </div>
              
              {/* TIMELINE */}
@@ -600,27 +638,27 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                 onClick={() => handleDockClick('text')} 
             />
             <DockButton 
-                icon={<MagicWandIcon className="w-5 h-5 md:w-6 md:h-6" />} 
+                icon={<MagicWandIcon className="w-5 h-5 md:w-6 md:h-6 text-purple-400" />} 
                 label="AI Tools" 
-                active={isResourcePanelOpen && activeResourceTab === 'ai'} 
-                onClick={() => handleDockClick('ai')} 
+                active={isAIToolsOpen} 
+                onClick={() => handleOpenAITools()} 
             />
         </div>
 
         {/* MODALS */}
-        {isAIToolsOpen && activeSegment && (
-            <AIToolsModal
-                isOpen={isAIToolsOpen}
-                onClose={() => setIsAIToolsOpen(false)}
-                segment={activeSegment}
-                activeClipId={activeSegment.media[0].id}
-                onUpdateMedia={(newUrl) => handleResourceSelectMedia(newUrl, 'image')}
-                onUpdateAudio={(newUrl, duration) => handleUpdateSegmentAudio(activeSegment.id, newUrl, duration)}
-                initialTab={aiToolsInitialTab}
-                onGenerateAllNarrations={handleGenerateAllNarrations}
-                generationProgress={generationProgress}
-            />
-        )}
+        <AIToolsModal 
+            isOpen={isAIToolsOpen}
+            onClose={() => setIsAIToolsOpen(false)}
+            segment={activeSegment || segments[0]} 
+            activeClipId={activeSegment?.media[0]?.id || ''} 
+            onUpdateMedia={handleResourceSelectMedia}
+            onUpdateAudio={(url, duration) => {
+                if(activeSegmentId) handleUpdateSegmentAudio(activeSegmentId, url, duration);
+            }}
+            initialTab={aiToolsInitialTab}
+            onGenerateAllNarrations={handleGenerateAllNarrations}
+            generationProgress={generationProgress}
+        />
 
         <ExportModal 
             isOpen={isExportOpen}
@@ -633,14 +671,17 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   );
 };
 
-const DockButton: React.FC<{ icon: React.ReactNode, label: string, active: boolean, onClick: () => void }> = ({ icon, label, active, onClick }) => (
-    <button 
-        onClick={onClick}
-        className={`flex flex-col items-center justify-center gap-1 w-16 md:w-20 h-full transition-all duration-200 border-t-2 ${active ? 'border-purple-500 bg-white/5 text-purple-400' : 'border-transparent text-gray-400 hover:text-white hover:bg-white/5'}`}
-    >
-        <div className={`p-1.5 rounded-full ${active ? 'bg-purple-500/10' : ''}`}>{icon}</div>
-        <span className="text-[9px] md:text-[10px] font-bold uppercase tracking-wider">{label}</span>
-    </button>
-)
+const DockButton: React.FC<{ icon: React.ReactNode; label: string; active?: boolean; onClick: () => void }> = ({ icon, label, active, onClick }) => (
+  <button 
+    onClick={onClick}
+    className={`flex flex-col items-center justify-center gap-1 w-16 md:w-20 h-full transition-all duration-200 relative group ${active ? 'text-white' : 'text-gray-500 hover:text-gray-300'}`}
+  >
+    {active && <div className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-1 bg-purple-500 rounded-b-full shadow-[0_0_10px_rgba(168,85,247,0.8)]"></div>}
+    <div className={`p-1.5 rounded-xl transition-all ${active ? 'bg-purple-500/10 scale-110' : 'group-hover:bg-white/5'}`}>
+        {icon}
+    </div>
+    <span className={`text-[10px] md:text-xs font-bold tracking-wide transition-all ${active ? 'text-purple-400' : ''}`}>{label}</span>
+  </button>
+);
 
 export default VideoEditor;

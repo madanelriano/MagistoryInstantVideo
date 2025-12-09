@@ -1,6 +1,5 @@
 
 import { OAuth2Client } from 'google-auth-library';
-import { PrismaClient } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 
 // Safely initialize OAuth Client
@@ -9,11 +8,13 @@ const client = new OAuth2Client(clientId);
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key';
 
 // --- DB Abstraction for Fallback ---
-let prismaInstance: PrismaClient | null = null;
+let prismaInstance: any = null;
 const memoryUsers: any[] = [];
 
 try {
     if (process.env.DATABASE_URL) {
+        // Dynamically require PrismaClient to avoid compilation errors if not generated
+        const { PrismaClient } = require('@prisma/client');
         prismaInstance = new PrismaClient();
     } else {
         console.log("----------------------------------------------------------------");
