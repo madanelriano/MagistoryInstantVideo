@@ -402,12 +402,12 @@ export async function generateSpeechFromText(text: string): Promise<string> {
     const ai = getAI();
     let lastError: any;
     
-    // Retry logic for resilience (e.g., against 500/RPC errors)
-    for (let attempt = 0; attempt < 3; attempt++) {
+    // Increased retry count to 5 and added aggressive exponential backoff
+    // to handle rate limiting for long video generation tasks.
+    for (let attempt = 0; attempt < 5; attempt++) {
         try {
             const response = await ai.models.generateContent({
                 model: "gemini-2.5-flash-preview-tts",
-                // Simply passing the text is often more robust for the TTS model than wrapping it in an instruction
                 contents: [{ parts: [{ text: text }] }],
                 config: {
                     responseModalities: [Modality.AUDIO],
@@ -423,11 +423,16 @@ export async function generateSpeechFromText(text: string): Promise<string> {
                 throw new Error("No audio data returned from API.");
             }
             return base64Audio;
-        } catch (error) {
+        } catch (error: any) {
             console.warn(`TTS Attempt ${attempt + 1} failed:`, error);
             lastError = error;
-            // Exponential backoff: wait 1s, 2s, etc.
-            await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
+            
+            // Check for quota/rate limit errors specifically if possible, 
+            // but generally applying exponential backoff helps all transient errors.
+            // Wait: 2s, 4s, 8s, 16s...
+            const delay = Math.pow(2, attempt + 1) * 1000;
+            console.log(`Waiting ${delay}ms before retry...`);
+            await new Promise(r => setTimeout(r, delay));
         }
     }
     

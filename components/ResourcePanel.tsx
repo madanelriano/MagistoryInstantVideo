@@ -20,10 +20,11 @@ interface ResourcePanelProps {
   segments?: Segment[];
   activeSegmentId?: string | null;
   onSelectSegment?: (id: string) => void;
+  videoTitle?: string;
 }
 
 const ResourcePanel: React.FC<ResourcePanelProps> = ({ 
-  activeTab, onSelectMedia, onSelectAudio, onAddText, onUpdateSegmentText, onOpenAITools, onAutoCaptions, initialAudioType, segments, activeSegmentId, onSelectSegment
+  activeTab, onSelectMedia, onSelectAudio, onAddText, onUpdateSegmentText, onOpenAITools, onAutoCaptions, initialAudioType, segments, activeSegmentId, onSelectSegment, videoTitle
 }) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<any[]>([]);
@@ -62,12 +63,12 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
            setQuery(keywords);
            handleSearch(keywords);
        } else if (!query) {
-           // Fallback default if empty
+           // Fallback default if empty. Use video title if available for better relevance than 'business'
            setQuery('');
-           handleSearch('business');
+           handleSearch(videoTitle || 'business');
        }
     }
-  }, [activeSegmentId, activeTab]); 
+  }, [activeSegmentId, activeTab, videoTitle]); 
 
   // Re-search when switching audio type or stock media type
   useEffect(() => {
@@ -123,7 +124,8 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
       if (!activeSegment?.narration_text) return;
       setIsLoading(true);
       try {
-          const suggestions = await suggestMediaKeywords(activeSegment.narration_text);
+          // Improve relevance by passing video title context
+          const suggestions = await suggestMediaKeywords(activeSegment.narration_text, videoTitle);
           // Get the first best suggestion
           const bestKeyword = suggestions.split(',')[0].trim();
           if (bestKeyword) {
