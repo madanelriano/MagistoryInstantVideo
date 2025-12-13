@@ -1,7 +1,7 @@
 
 import React from 'react';
 import type { Segment } from '../types';
-import { MusicIcon, ChevronLeftIcon, ChevronRightIcon } from './icons';
+import { MusicIcon, ChevronLeftIcon, ChevronRightIcon, AlertCircleIcon } from './icons';
 
 interface SegmentCardProps {
     segment: Segment;
@@ -29,6 +29,8 @@ const SegmentCard: React.FC<SegmentCardProps> = ({
     // Hide controls if segment is too narrow (less than 80px)
     const isCompact = widthPx < 100;
     const isTiny = widthPx < 60;
+    
+    const missingAudio = segment.narration_text && !segment.audioUrl;
 
     const NudgeButton: React.FC<{onClick: (e: React.MouseEvent) => void, children: React.ReactNode, position: 'left' | 'right', title: string}> = ({onClick, children, position, title}) => (
         <button
@@ -91,6 +93,13 @@ const SegmentCard: React.FC<SegmentCardProps> = ({
                     {segment.media.length} CLIPS
                 </div>
             )}
+            
+            {/* MISSING AUDIO WARNING */}
+            {missingAudio && !isTiny && (
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-red-600/90 p-1.5 rounded-full shadow-lg border border-white/20 animate-pulse z-20" title="Missing Audio Narration">
+                    <AlertCircleIcon className="w-4 h-4 text-white" />
+                </div>
+            )}
 
             {/* Audio Volume Slider - Visible on Hover or Active */}
             {segment.audioUrl && !isCompact && (
@@ -119,8 +128,8 @@ const SegmentCard: React.FC<SegmentCardProps> = ({
 
              {/* Narration Text Preview */}
              {!isTiny && (
-                <div className="absolute bottom-0 left-0 right-0 h-6 bg-gradient-to-t from-black via-black/80 to-transparent px-2 flex items-center">
-                    <p className="text-gray-300 text-[9px] truncate w-full leading-tight font-medium">
+                <div className={`absolute bottom-0 left-0 right-0 h-6 px-2 flex items-center ${missingAudio ? 'bg-red-900/80' : 'bg-gradient-to-t from-black via-black/80 to-transparent'}`}>
+                    <p className={`text-[9px] truncate w-full leading-tight font-medium ${missingAudio ? 'text-red-200' : 'text-gray-300'}`}>
                         {segment.narration_text || <span className="italic text-gray-500">No narration</span>}
                     </p>
                 </div>
