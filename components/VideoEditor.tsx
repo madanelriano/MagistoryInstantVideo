@@ -276,64 +276,72 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
       }
   }
 
-  // --- BATCH GENERATION HANDLER ---
+  // --- BATCH GENERATION HANDLER (OPTIMIZED) ---
   const handleGenerateAllNarrations = async () => {
-      const textSegments = segments.filter(s => !!s.narration_text && !s.audioUrl);
+      // 1. Identify segments that actually need audio
+      //    We map to indices to keep track of where to put results back
+      const indicesToProcess = segments
+          .map((s, i) => (s.narration_text && !s.audioUrl ? i : -1))
+          .filter(i => i !== -1);
       
-      if (textSegments.length === 0) {
+      if (indicesToProcess.length === 0) {
           alert("All segments with text already have audio! No new audio to generate.");
           return;
       }
 
-      setGenerationProgress({ current: 0, total: textSegments.length });
+      setGenerationProgress({ current: 0, total: indicesToProcess.length });
       
-      // Create a copy to work on
+      // Working copy
       const newSegments = [...segments];
-      let hasUpdates = false;
-      let completed = 0;
-      let consecutiveFailures = 0;
+      
+      // 2. Process in Batches of 5 (Concurrent requests)
+      //    This is significantly faster than sequential processing while respecting rate limits.
+      const BATCH_SIZE = 5; 
+      let completedCount = 0;
 
-      for (let i = 0; i < newSegments.length; i++) {
-          const seg = newSegments[i];
-          // Only process if missing audio
-          if (seg.narration_text && !seg.audioUrl) {
-             try {
-                 // ADDED DELAY: Wait 2.5 seconds between requests to avoid rate limits
-                 if (completed > 0) {
-                    await new Promise(r => setTimeout(r, 2500));
-                 }
+      for (let i = 0; i < indicesToProcess.length; i += BATCH_SIZE) {
+          const batchIndices = indicesToProcess.slice(i, i + BATCH_SIZE);
+          
+          // Create promises for the current batch
+          const batchPromises = batchIndices.map(async (segmentIndex) => {
+              const seg = newSegments[segmentIndex];
+              try {
+                  const base64Audio = await generateSpeechFromText(seg.narration_text);
+                  const wavUrl = createWavBlobUrl(base64Audio);
+                  const duration = await getAudioDuration(wavUrl);
+                  
+                  // Update the specific segment in our working copy
+                  newSegments[segmentIndex] = {
+                      ...seg,
+                      audioUrl: wavUrl,
+                      duration: duration > 0 ? duration : seg.duration,
+                      audioVolume: 1.0
+                  };
+              } catch (e) {
+                  console.error(`Failed to generate audio for segment ${segmentIndex}`, e);
+                  // We continue even if one fails, to maximize success for others
+              } finally {
+                  // Update progress bar atomically
+                  completedCount++;
+                  setGenerationProgress(prev => ({ 
+                      current: completedCount, 
+                      total: prev ? prev.total : indicesToProcess.length 
+                  }));
+              }
+          });
 
-                 const base64Audio = await generateSpeechFromText(seg.narration_text);
-                 const wavUrl = createWavBlobUrl(base64Audio);
-                 const duration = await getAudioDuration(wavUrl);
-                 
-                 // CRITICAL: Update segment duration to match audio exactly
-                 newSegments[i] = {
-                     ...seg,
-                     audioUrl: wavUrl,
-                     duration: duration > 0 ? duration : seg.duration,
-                     audioVolume: 1.0 
-                 };
-                 hasUpdates = true;
-                 consecutiveFailures = 0;
-             } catch (e: any) {
-                 console.error(`Failed to generate narration for segment ${i}`, e);
-                 consecutiveFailures++;
-                 
-                 if (consecutiveFailures >= 3) {
-                     alert(`Failed after 3 attempts. Error: ${e.message || 'Unknown'}. Saving progress.`);
-                     break;
-                 }
-             } finally {
-                 completed++;
-                 setGenerationProgress({ current: completed, total: textSegments.length });
-             }
+          // Wait for the entire batch to finish before moving to the next
+          await Promise.all(batchPromises);
+          
+          // Optional: Small breathing room between batches to prevent 429 bursts
+          // 500ms is usually enough if we are doing batches of 5
+          if (i + BATCH_SIZE < indicesToProcess.length) {
+              await new Promise(r => setTimeout(r, 500));
           }
       }
       
-      if (hasUpdates) {
-          setSegments(newSegments);
-      }
+      // Update state once fully done (or could be done per batch if preferred)
+      setSegments(newSegments);
       setGenerationProgress(null);
   };
 
@@ -491,8 +499,8 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
             onUpdateAudio={handleAIToolsUpdateAudio}
             initialTab={activeAIToolTab}
             allSegments={segments}
-            onGenerateAllNarrations={handleGenerateAllNarrations} // PASSED CORRECTLY NOW
-            generationProgress={generationProgress} // PASSED CORRECTLY NOW
+            onGenerateAllNarrations={handleGenerateAllNarrations} // Updated for high performance
+            generationProgress={generationProgress}
         />
 
         <ExportModal 
