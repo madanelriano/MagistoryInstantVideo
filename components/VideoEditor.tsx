@@ -276,10 +276,8 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
       }
   }
 
-  // --- BATCH GENERATION HANDLER (OPTIMIZED) ---
+  // --- ROBUST SEQUENTIAL GENERATION HANDLER ---
   const handleGenerateAllNarrations = async () => {
-      // 1. Identify segments that actually need audio
-      //    We map to indices to keep track of where to put results back
       const indicesToProcess = segments
           .map((s, i) => (s.narration_text && !s.audioUrl ? i : -1))
           .filter(i => i !== -1);
@@ -291,57 +289,64 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
 
       setGenerationProgress({ current: 0, total: indicesToProcess.length });
       
-      // Working copy
-      const newSegments = [...segments];
-      
-      // 2. Process in Batches of 5 (Concurrent requests)
-      //    This is significantly faster than sequential processing while respecting rate limits.
-      const BATCH_SIZE = 5; 
+      // We must mutate and save incrementally to ensure work isn't lost if the browser throttles
       let completedCount = 0;
+      const total = indicesToProcess.length;
 
-      for (let i = 0; i < indicesToProcess.length; i += BATCH_SIZE) {
-          const batchIndices = indicesToProcess.slice(i, i + BATCH_SIZE);
-          
-          // Create promises for the current batch
-          const batchPromises = batchIndices.map(async (segmentIndex) => {
-              const seg = newSegments[segmentIndex];
+      // Helper for delay to avoid rate limits (RPM)
+      const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+      // We clone segments initially to have a working copy
+      // But inside the loop, we will constantly update the React State
+      let currentSegmentsState = [...segments];
+
+      for (const idx of indicesToProcess) {
+          const seg = currentSegmentsState[idx];
+          let success = false;
+          let retries = 0;
+
+          while (!success && retries < 3) {
               try {
+                  // Generate
                   const base64Audio = await generateSpeechFromText(seg.narration_text);
                   const wavUrl = createWavBlobUrl(base64Audio);
                   const duration = await getAudioDuration(wavUrl);
                   
-                  // Update the specific segment in our working copy
-                  newSegments[segmentIndex] = {
+                  // Update specific segment in our working array
+                  currentSegmentsState[idx] = {
                       ...seg,
                       audioUrl: wavUrl,
                       duration: duration > 0 ? duration : seg.duration,
-                      audioVolume: 1.0
+                      audioVolume: 1.0,
+                      wordTimings: estimateWordTimings(seg.narration_text, duration > 0 ? duration : seg.duration)
                   };
-              } catch (e) {
-                  console.error(`Failed to generate audio for segment ${segmentIndex}`, e);
-                  // We continue even if one fails, to maximize success for others
-              } finally {
-                  // Update progress bar atomically
-                  completedCount++;
-                  setGenerationProgress(prev => ({ 
-                      current: completedCount, 
-                      total: prev ? prev.total : indicesToProcess.length 
-                  }));
-              }
-          });
 
-          // Wait for the entire batch to finish before moving to the next
-          await Promise.all(batchPromises);
-          
-          // Optional: Small breathing room between batches to prevent 429 bursts
-          // 500ms is usually enough if we are doing batches of 5
-          if (i + BATCH_SIZE < indicesToProcess.length) {
-              await new Promise(r => setTimeout(r, 500));
+                  success = true;
+                  
+                  // INCREMENTAL SAVE: Update React state immediately after EACH success.
+                  // This is critical for long processes. If user stops or browser freezes, progress is kept.
+                  setSegments([...currentSegmentsState]);
+
+                  // Safety delay: 1.5 seconds between requests ~ 40 requests/min max.
+                  // If loop is fast, we hit limits.
+                  await delay(1500);
+
+              } catch (e: any) {
+                  console.warn(`Failed to generate audio for segment ${idx}, retry ${retries + 1}`, e);
+                  retries++;
+                  // Exponential backoff for retries: 4s, 8s, 12s
+                  await delay(4000 * retries); 
+              }
           }
+
+          if (!success) {
+              console.error(`Skipping segment ${idx} after 3 retries.`);
+          }
+
+          completedCount++;
+          setGenerationProgress({ current: completedCount, total });
       }
       
-      // Update state once fully done (or could be done per batch if preferred)
-      setSegments(newSegments);
       setGenerationProgress(null);
   };
 
@@ -499,7 +504,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
             onUpdateAudio={handleAIToolsUpdateAudio}
             initialTab={activeAIToolTab}
             allSegments={segments}
-            onGenerateAllNarrations={handleGenerateAllNarrations} // Updated for high performance
+            onGenerateAllNarrations={handleGenerateAllNarrations} // Updated for robust sequential processing
             generationProgress={generationProgress}
         />
 
