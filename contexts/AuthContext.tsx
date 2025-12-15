@@ -13,6 +13,7 @@ interface AuthContextType {
     user: User | null;
     token: string | null;
     login: (googleToken: string) => Promise<void>;
+    loginAsGuest: () => void;
     logout: () => void;
     refreshUser: () => Promise<void>;
     deductCredits: (cost: number, action: string) => Promise<boolean>;
@@ -73,6 +74,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
     };
 
+    const loginAsGuest = () => {
+        console.warn("Entering Offline Mode manually.");
+        const mockToken = `mock-session-${Date.now()}`;
+        const mockUser = {
+            id: 'demo-user',
+            name: 'Guest (Offline Mode)',
+            email: 'guest@magistory.com',
+            credits: 100 // Free credits for offline usage
+        };
+        
+        localStorage.setItem('auth_token', mockToken);
+        setToken(mockToken);
+        setUser(mockUser);
+    };
+
     const login = async (googleToken: string) => {
         try {
             const res = await axios.post(`${apiUrl}/auth/google`, { token: googleToken });
@@ -87,22 +103,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             // AUTOMATIC OFFLINE FALLBACK
             // Detect Network Error (Backend down or CORS issue)
             if (error.message === 'Network Error' || error.code === 'ERR_NETWORK') {
-                console.warn("Backend unreachable. Enabling Offline Mode.");
-                
-                // Create a Mock User Session
-                const mockToken = `mock-session-${Date.now()}`;
-                const mockUser = {
-                    id: 'demo-user',
-                    name: 'Guest (Offline Mode)',
-                    email: 'guest@magistory.com',
-                    credits: 100 // Free credits for offline usage
-                };
-                
-                localStorage.setItem('auth_token', mockToken);
-                setToken(mockToken);
-                setUser(mockUser);
-                
-                // Return explicitly to indicate success to caller
+                loginAsGuest();
                 return; 
             }
             
@@ -157,7 +158,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     return (
-        <AuthContext.Provider value={{ user, token, login, logout, refreshUser, deductCredits, isLoading }}>
+        <AuthContext.Provider value={{ user, token, login, loginAsGuest, logout, refreshUser, deductCredits, isLoading }}>
             {children}
         </AuthContext.Provider>
     );
