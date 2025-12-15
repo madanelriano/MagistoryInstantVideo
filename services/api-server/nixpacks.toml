@@ -1,0 +1,13 @@
+# services/api-server/nixpacks.toml
+
+[phases.setup]
+nixPkgs = ["openssl", "nodejs"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[phases.build]
+cmds = ["npx prisma generate", "npm run build"]
+
+[start]
+cmd = "npm start"
