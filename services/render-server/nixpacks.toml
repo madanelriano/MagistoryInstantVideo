@@ -1,0 +1,13 @@
+# services/render-server/nixpacks.toml
+
+[phases.setup]
+nixPkgs = ["ffmpeg", "nodejs"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm start"
