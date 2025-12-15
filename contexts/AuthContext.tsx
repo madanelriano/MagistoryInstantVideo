@@ -38,14 +38,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }, [token]);
 
     const refreshUser = async () => {
+        // OFFLINE MODE CHECK: If token is a mock token, restore mock user
+        if (token && token.startsWith('mock-session-')) {
+             if (!user) {
+                 setUser({
+                    id: 'demo-user',
+                    name: 'Guest (Offline Mode)',
+                    email: 'guest@magistory.com',
+                    credits: 100
+                 });
+             }
+             setIsLoading(false);
+             return;
+        }
+
         try {
             const res = await axios.get(`${apiUrl}/user/me`, {
                 headers: { Authorization: `Bearer ${token}` }
             });
             setUser(res.data);
-        } catch (error) {
+        } catch (error: any) {
             console.error("Failed to fetch user", error);
-            logout();
+            // Don't auto-logout immediately on network error (allow retry), unless it's a 401/403
+            if (error.response && (error.response.status === 401 || error.response.status === 403)) {
+                 logout();
+            } else if ((error as any).code === "ERR_NETWORK") {
+                // If network error during refresh, maybe we keep the user state if it existed, or do nothing
+                // For now, let's stop loading.
+            } else {
+                logout();
+            }
         } finally {
             setIsLoading(false);
         }
@@ -59,8 +81,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             localStorage.setItem('auth_token', sessionToken);
             setToken(sessionToken);
             setUser(userData);
-        } catch (error) {
+        } catch (error: any) {
             console.error("Login failed", error);
+            
+            // AUTOMATIC OFFLINE FALLBACK
+            // Detect Network Error (Backend down or CORS issue)
+            if (error.message === 'Network Error' || error.code === 'ERR_NETWORK') {
+                console.warn("Backend unreachable. Enabling Offline Mode.");
+                
+                // Create a Mock User Session
+                const mockToken = `mock-session-${Date.now()}`;
+                const mockUser = {
+                    id: 'demo-user',
+                    name: 'Guest (Offline Mode)',
+                    email: 'guest@magistory.com',
+                    credits: 100 // Free credits for offline usage
+                };
+                
+                localStorage.setItem('auth_token', mockToken);
+                setToken(mockToken);
+                setUser(mockUser);
+                
+                // Return explicitly to indicate success to caller
+                return; 
+            }
+            
             throw error;
         }
     };
@@ -74,6 +119,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const deductCredits = async (cost: number, action: string): Promise<boolean> => {
         if (!user || !token) return false;
         
+        // Offline Mode Handler
+        if (token.startsWith('mock-session-')) {
+            if (user.credits >= cost) {
+                const newCredits = user.credits - cost;
+                setUser({ ...user, credits: newCredits });
+                return true;
+            } else {
+                alert("Insufficient offline credits.");
+                return false;
+            }
+        }
+
         try {
             const res = await axios.post(`${apiUrl}/credits/deduct`, 
                 { cost, action },
@@ -88,6 +145,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (error: any) {
             if (error.response?.status === 403) {
                 alert("Insufficient Credits! Please upgrade your plan.");
+            } else if (error.message === 'Network Error' || error.code === 'ERR_NETWORK') {
+                 // If backend drops mid-session, allow action optimistically
+                 console.warn("Network error during credit deduction. Allowing action optimistically.");
+                 return true;
             } else {
                 console.error("Transaction failed", error);
             }
