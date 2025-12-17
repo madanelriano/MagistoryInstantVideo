@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import { renderVideo } from './renderer';
@@ -6,154 +7,80 @@ import fs from 'fs';
 import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 
-// Handle unhandled exceptions to prevent hard crashes
-(process as any).on('uncaughtException', (err: any) => {
-    console.error('CRITICAL UNCAUGHT EXCEPTION:', err);
-});
-
-(process as any).on('unhandledRejection', (reason: any, promise: any) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
 const app = express();
-
-// Enable Trust Proxy for Railway/Heroku Load Balancers
 app.enable('trust proxy');
 
-// Priority: Environment Variable > 3002. Railway MUST use process.env.PORT
-const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3002;
+// 1. HEALTH CHECK PERTAMA (Agar Railway tidak membunuh proses saat startup)
+app.get('/health', (req, res) => res.status(200).send('OK'));
+app.get('/', (req, res) => res.status(200).send('Render Server Online'));
 
-console.log(`Starting Render Server...`);
-console.log(`Configured Port: ${PORT} (Env: ${process.env.PORT})`);
-
-// --- MIDDLEWARE SETUP (Order matters!) ---
-
-// 1. Request Logger (Debug Health Checks)
-app.use((req, res, next) => {
-    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} from ${req.ip}`);
-    next();
-});
-
-// 2. CORS - Must be first to handle Preflight (OPTIONS) requests correctly
+// 2. CORS
 app.use(cors({
-    origin: true, // Allow all origins for now to prevent CORS blocking 502s
+    origin: true,
     credentials: true,
     methods: ['GET', 'POST', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }) as any);
 
-// 3. Body Parser - Increase limit for uploads (large video payloads)
-app.use(express.json({ limit: '500mb' }) as any);
+// 3. MEMORY OPTIMIZATION: Turunkan limit ke 100MB. 
+// 500MB akan membunuh server Railway RAM 512MB secara instan.
+app.use(express.json({ limit: '100mb' }) as any);
 
-// Ensure Temp Directory Exists - Use OS Temp Dir for reliability
+const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3002;
 const TEMP_DIR = path.join(os.tmpdir(), 'magistory-render');
+
 try {
-    if (!fs.existsSync(TEMP_DIR)) {
-        console.log(`Creating temp directory at: ${TEMP_DIR}`);
-        fs.mkdirSync(TEMP_DIR, { recursive: true });
-    }
+    if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR, { recursive: true });
 } catch (err) {
-    console.error("WARNING: Failed to create temp directory.", err);
+    console.error("Temp Dir Error:", err);
 }
 
-// --- HEALTH CHECK ---
-app.get('/', (req, res) => {
-    res.status(200).send('Magistory Render Server is Running.');
-});
-
-app.get('/health', (req, res) => {
-    res.status(200).send('OK');
-});
-
-// --- RENDERER ROUTES ---
-
-// Simple in-memory job store
 const jobs = new Map<string, { status: 'processing' | 'completed' | 'error', path?: string, error?: string, createdAt: number }>();
 
-// Clean up old jobs periodically (every 1 hour)
+// Cleanup setiap 30 menit
 setInterval(() => {
     const now = Date.now();
     for (const [id, job] of jobs.entries()) {
-        if (now - job.createdAt > 3600000) { // 1 hour
-            try {
-                if (job.path && fs.existsSync(job.path)) {
-                    fs.unlinkSync(job.path);
-                }
-            } catch (e) { /* ignore cleanup errors */ }
+        if (now - job.createdAt > 1800000) {
+            try { if (job.path && fs.existsSync(job.path)) fs.unlinkSync(job.path); } catch (e) {}
             jobs.delete(id);
         }
     }
-}, 3600000);
+}, 1800000);
 
-// 1. Start Render Job
 app.post('/render', async (req, res) => {
     try {
-        console.log(`Received render request: ${req.body.title}`);
         const jobId = uuidv4();
-        
+        console.log(`Job Started: ${jobId}`);
         jobs.set(jobId, { status: 'processing', createdAt: Date.now() });
         
-        // Non-blocking render call
         renderVideo(req.body, TEMP_DIR)
             .then((outputPath) => {
-                console.log(`Job ${jobId} completed: ${outputPath}`);
                 jobs.set(jobId, { status: 'completed', path: outputPath, createdAt: Date.now() });
             })
             .catch((err) => {
-                console.error(`Job ${jobId} failed:`, err);
+                console.error(`Job Failed ${jobId}:`, err);
                 jobs.set(jobId, { status: 'error', error: err.message, createdAt: Date.now() });
             });
 
         res.json({ jobId });
-
     } catch (error: any) {
-        console.error("Failed to start job:", error);
         res.status(500).json({ error: error.message });
     }
 });
 
-// 2. Check Job Status
 app.get('/status/:jobId', (req, res) => {
-    const jobId = req.params.jobId;
-    const job = jobs.get(jobId);
-    
-    if (!job) {
-        return res.status(404).json({ error: 'Job not found' });
-    }
-    
+    const job = jobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: 'Not Found' });
     res.json({ status: job.status, error: job.error });
 });
 
-// 3. Download File
 app.get('/download/:jobId', (req, res) => {
-    const jobId = req.params.jobId;
-    const job = jobs.get(jobId);
-    
-    if (!job || job.status !== 'completed' || !job.path) {
-        return res.status(404).json({ error: 'File not ready or not found' });
-    }
-
-    if (!fs.existsSync(job.path)) {
-         return res.status(404).json({ error: 'File deleted from server' });
-    }
-    
-    res.setHeader('Content-Type', 'video/mp4');
-    
-    res.download(job.path, `video_export.mp4`, (err) => {
-        if (err) console.error("Download error:", err);
-    });
+    const job = jobs.get(req.params.jobId);
+    if (!job || job.status !== 'completed' || !job.path) return res.status(404).send('File not ready');
+    res.download(job.path, 'video.mp4');
 });
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log("==================================================");
-    console.log(`✅ Render Server running on port ${PORT}`);
-    console.log("==================================================");
-});
-
-// Graceful Shutdown
-(process as any).on('SIGTERM', () => {
-    console.log('SIGTERM received. Shutting down gracefully...');
-    server.close(() => {
-        console.log('Process terminated.');
-    });
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`✅ Render Server Live on port ${PORT}`);
 });
