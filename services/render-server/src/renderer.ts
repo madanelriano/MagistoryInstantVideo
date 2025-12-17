@@ -1,10 +1,8 @@
-
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
-// Explicitly import Buffer to resolve naming conflicts or missing global types in some environments
 import { Buffer } from 'buffer';
 
 // Prioritaskan ffmpeg sistem (dari nixpacks) daripada binary statis yang berat
@@ -30,13 +28,17 @@ async function saveAsset(url: string, jobId: string, type: string, baseDir: stri
 
     if (url.startsWith('data:')) {
         const base64Data = url.split(',')[1];
-        // Fix: Use Buffer.from with imported Buffer to handle base64 encoding correctly
         fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
     } else {
         const response = await axios({ url, method: 'GET', responseType: 'stream' });
         const writer = fs.createWriteStream(filePath);
         response.data.pipe(writer);
-        await new Promise((res, rej) => { writer.on('finish', res); writer.on('error', rej); });
+        
+        // FIX: Explicitly call resolve/reject with correct arguments to satisfy TS
+        await new Promise<void>((res, rej) => { 
+            writer.on('finish', () => res()); 
+            writer.on('error', (err) => rej(err)); 
+        });
     }
     return filePath;
 }
@@ -56,7 +58,6 @@ export async function renderVideo(job: RenderJob, tempDir: string): Promise<stri
             const seg = job.segments[i];
             const segPath = path.join(jobDir, `seg_${i}.mp4`);
             
-            // Render sederhana per segment untuk menghemat RAM
             const clipPath = await saveAsset(seg.media[0].url, jobId, seg.media[0].type, tempDir);
             let audioPath = seg.audioUrl ? await saveAsset(seg.audioUrl, jobId, 'audio', tempDir) : null;
 
@@ -71,16 +72,22 @@ export async function renderVideo(job: RenderJob, tempDir: string): Promise<stri
                     `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v]`
                 ])
                 .outputOptions([
-                    '-map [v]', '-map 1:a', '-c:v libx264', '-preset superfast', '-crf 28', '-c:a aac', '-shortest'
+                    '-map [v]', 
+                    '-map 1:a', 
+                    '-c:v libx264', 
+                    '-preset superfast', 
+                    '-crf 28', 
+                    '-c:a aac', 
+                    '-shortest'
                 ])
                 .save(segPath)
-                .on('end', resolve)
-                .on('error', reject);
+                // FIX: Wrap resolve/reject in anonymous functions
+                .on('end', () => resolve())
+                .on('error', (err) => reject(err));
             });
             segmentFiles.push(segPath);
         }
 
-        // Gabungkan semua segment
         const listPath = path.join(jobDir, 'list.txt');
         fs.writeFileSync(listPath, segmentFiles.map(f => `file '${f}'`).join('\n'));
 
@@ -90,8 +97,9 @@ export async function renderVideo(job: RenderJob, tempDir: string): Promise<stri
                 .inputOptions(['-f concat', '-safe 0'])
                 .outputOptions(['-c copy'])
                 .save(outputPath)
-                .on('end', resolve)
-                .on('error', reject);
+                // FIX: Wrap resolve/reject in anonymous functions
+                .on('end', () => resolve())
+                .on('error', (err) => reject(err));
         });
 
         return outputPath;
