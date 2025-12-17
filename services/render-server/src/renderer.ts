@@ -6,9 +6,16 @@ import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import { Buffer } from 'buffer';
 
+// @ts-ignore
+import ffmpegPath from 'ffmpeg-static';
+// @ts-ignore
+import { path as ffprobePath } from 'ffprobe-static';
+
+// Set binary paths explicitely for Railway/Docker environments
+if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
+if (ffprobePath) ffmpeg.setFfprobePath(ffprobePath);
+
 const TEMP_DIR = path.join((process as any).cwd(), 'temp');
-// Standard font path in Debian/Ubuntu (Docker Node Slim) after fonts-dejavu is installed
-const FONT_PATH_DEJAVU = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';
 
 interface RenderJob {
     title: string;
@@ -56,6 +63,7 @@ async function saveAsset(url: string, jobId: string, type: 'image' | 'video' | '
 
 // Generate Advanced Substation Alpha (.ass) subtitle file for perfect sync
 function createASSFile(filePath: string, text: string, timings: any[], duration: number, width: number, height: number) {
+    // Removed absolute path /usr/share/fonts... using 'Sans' generic family which ffmpeg usually handles better on minimal systems
     let content = `[Script Info]
 ScriptType: v4.00+
 PlayResX: ${width}
@@ -64,7 +72,7 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,${Math.round(height * 0.06)},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,0,2,10,10,${Math.round(height * 0.08)},1
+Style: Default,Sans,${Math.round(height * 0.06)},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,0,2,10,10,${Math.round(height * 0.08)},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

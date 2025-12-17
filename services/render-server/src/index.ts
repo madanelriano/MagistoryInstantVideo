@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import { renderVideo } from './renderer';
@@ -20,17 +21,21 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT) : 3002;
 
 console.log(`Starting Render Server... Environment Port: ${process.env.PORT}, Selected Port: ${PORT}`);
 
-// Increase limit for uploads (large video payloads)
-app.use(express.json({ limit: '500mb' }) as any);
+// --- MIDDLEWARE SETUP (Order matters!) ---
 
-// CORS Configuration
+// 1. CORS - Must be first to handle Preflight (OPTIONS) requests correctly
 app.use(cors({
     origin: (origin, callback) => {
         if (!origin) return callback(null, true);
         return callback(null, true);
     },
-    credentials: true
+    credentials: true,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }) as any);
+
+// 2. Body Parser - Increase limit for uploads (large video payloads)
+app.use(express.json({ limit: '500mb' }) as any);
 
 // Ensure Temp Directory Exists - Wrap in try-catch for read-only filesystem protection
 const TEMP_DIR = path.join((process as any).cwd(), 'temp');
