@@ -1,3 +1,4 @@
+
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import fs from 'fs';
@@ -5,10 +6,21 @@ import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import { Buffer } from 'buffer';
 
-// Prioritaskan ffmpeg sistem (dari nixpacks) daripada binary statis yang berat
-const systemFfmpeg = '/usr/bin/ffmpeg';
-if (fs.existsSync(systemFfmpeg)) {
-    ffmpeg.setFfmpegPath(systemFfmpeg);
+// Prioritaskan ffmpeg dari node_modules (ffmpeg-static) jika ada, atau sistem
+import ffmpegStatic from 'ffmpeg-static';
+import ffprobeStatic from 'ffprobe-static';
+
+if (ffmpegStatic) {
+    ffmpeg.setFfmpegPath(ffmpegStatic);
+} else {
+    const systemFfmpeg = '/usr/bin/ffmpeg';
+    if (fs.existsSync(systemFfmpeg)) {
+        ffmpeg.setFfmpegPath(systemFfmpeg);
+    }
+}
+
+if (ffprobeStatic && ffprobeStatic.path) {
+    ffmpeg.setFfprobePath(ffprobeStatic.path);
 }
 
 interface RenderJob {
@@ -34,7 +46,6 @@ async function saveAsset(url: string, jobId: string, type: string, baseDir: stri
         const writer = fs.createWriteStream(filePath);
         response.data.pipe(writer);
         
-        // FIX: Explicitly call resolve/reject with correct arguments to satisfy TS
         await new Promise<void>((res, rej) => { 
             writer.on('finish', () => res()); 
             writer.on('error', (err) => rej(err)); 
@@ -63,31 +74,51 @@ export async function renderVideo(job: RenderJob, tempDir: string): Promise<stri
 
             await new Promise<void>((resolve, reject) => {
                 const cmd = ffmpeg(clipPath);
-                if (seg.media[0].type === 'image') cmd.inputOptions(['-loop 1', `-t ${seg.duration}`]);
                 
-                if (audioPath) cmd.input(audioPath);
-                else cmd.input('anullsrc=cl=stereo:r=44100').inputFormat('lavfi').inputOptions([`-t ${seg.duration}`]);
-
-                cmd.complexFilter([
+                // Jika input berupa gambar, buat loop
+                if (seg.media[0].type === 'image') {
+                    cmd.inputOptions(['-loop 1', `-t ${seg.duration}`]);
+                } else {
+                    cmd.inputOptions([`-t ${seg.duration}`]);
+                }
+                
+                const filterComplex = [
                     `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v]`
-                ])
-                .outputOptions([
-                    '-map [v]', 
-                    '-map 1:a', 
-                    '-c:v libx264', 
-                    '-preset superfast', 
-                    '-crf 28', 
-                    '-c:a aac', 
-                    '-shortest'
-                ])
-                .save(segPath)
-                // FIX: Wrap resolve/reject in anonymous functions
-                .on('end', () => resolve())
-                .on('error', (err) => reject(err));
+                ];
+
+                const outputOptions = [
+                    '-map [v]',
+                    '-c:v libx264',
+                    '-preset superfast',
+                    '-crf 28',
+                    '-c:a aac',
+                    '-shortest',
+                    `-t ${seg.duration}`
+                ];
+
+                if (audioPath) {
+                    // Jika ada file audio, tambahkan sebagai input kedua
+                    cmd.input(audioPath);
+                    outputOptions.push('-map 1:a');
+                } else {
+                    // Jika TIDAK ADA audio, buat audio hening di dalam filter (menghindari -f lavfi)
+                    filterComplex.push(`anullsrc=channel_layout=stereo:sample_rate=44100:duration=${seg.duration}[a]`);
+                    outputOptions.push('-map [a]');
+                }
+
+                cmd.complexFilter(filterComplex)
+                    .outputOptions(outputOptions)
+                    .save(segPath)
+                    .on('end', () => resolve())
+                    .on('error', (err) => {
+                        console.error(`Error rendering segment ${i}:`, err);
+                        reject(err);
+                    });
             });
             segmentFiles.push(segPath);
         }
 
+        // Gabungkan semua segment
         const listPath = path.join(jobDir, 'list.txt');
         fs.writeFileSync(listPath, segmentFiles.map(f => `file '${f}'`).join('\n'));
 
@@ -97,7 +128,6 @@ export async function renderVideo(job: RenderJob, tempDir: string): Promise<stri
                 .inputOptions(['-f concat', '-safe 0'])
                 .outputOptions(['-c copy'])
                 .save(outputPath)
-                // FIX: Wrap resolve/reject in anonymous functions
                 .on('end', () => resolve())
                 .on('error', (err) => reject(err));
         });
