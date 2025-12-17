@@ -343,7 +343,8 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
       setGenerationProgress({ current: 0, total: totalCount });
       stopGenerationRef.current = false;
       
-      let completedCount = 0;
+      let processedCount = 0;
+      let successCount = 0;
       let currentSegmentsState = [...segments];
       
       const selectedVoice = settings?.voice || 'Kore';
@@ -375,21 +376,27 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
 
               // Commit to UI
               setSegments([...currentSegmentsState]);
-              
-              // Increment Progress
-              completedCount++;
-              setGenerationProgress({ current: completedCount, total: totalCount });
-
-              // Small delay to prevent UI freeze and allow cancellation check
-              await new Promise(r => setTimeout(r, 500));
+              successCount++;
 
           } catch (e: any) {
               console.error(`Failed to generate audio for segment ${idx}:`, e);
-              // In bulk mode, we skip failed items and continue to the next
+              // In bulk mode, we continue to the next item even if one fails
+          } finally {
+              // CRITICAL FIX: Always increment progress to prevent "Stuck at 0" UI
+              processedCount++;
+              setGenerationProgress({ current: processedCount, total: totalCount });
+              
+              // Small delay to prevent UI freeze and allow cancellation check
+              await new Promise(r => setTimeout(r, 500));
           }
       }
       
       setGenerationProgress(null);
+      
+      if (successCount < totalCount && !stopGenerationRef.current) {
+          // Optional: Notify user if some failed
+          console.warn(`Bulk generation finished. ${successCount}/${totalCount} successful.`);
+      }
   };
 
   const handleCancelGeneration = () => {
