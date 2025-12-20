@@ -1,4 +1,3 @@
-
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import fs from 'fs';
@@ -6,9 +5,12 @@ import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import { Buffer } from 'buffer';
 
-// Prioritaskan ffmpeg dari node_modules (ffmpeg-static) jika ada, atau sistem
-import ffmpegStatic from 'ffmpeg-static';
-import ffprobeStatic from 'ffprobe-static';
+// Add type declaration for require to fix TS error
+declare const require: any;
+
+// Use require to avoid TS7016 error (missing type definitions)
+const ffmpegStatic = require('ffmpeg-static');
+const ffprobeStatic = require('ffprobe-static');
 
 if (ffmpegStatic) {
     ffmpeg.setFfmpegPath(ffmpegStatic);
