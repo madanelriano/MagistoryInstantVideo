@@ -5,10 +5,10 @@
   "description": "API Server for Magistory (Auth, Credits, User Data)",
   "main": "dist/index.js",
   "scripts": {
-    "build": "prisma generate && tsc",
+    "build": "tsc",
     "start": "node dist/index.js",
     "dev": "nodemon src/index.ts",
-    "postinstall": "prisma generate || echo 'Prisma generate skipped'"
+    "postinstall": "echo 'Skipping prisma generate in postinstall for JSON mode'"
   },
   "dependencies": {
     "@prisma/client": "^5.10.2",
