@@ -93,12 +93,12 @@ app.get('/download/:jobId', (req, res) => {
     res.download(job.path, 'video.mp4');
 });
 
-// Start Server
-const server = app.listen(PORT, () => {
-    console.log(`✅ Render Server Live on port ${PORT}`);
+// Start Server - BIND TO 0.0.0.0
+const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`✅ Render Server Live on port ${PORT} (0.0.0.0)`);
 });
 
-// --- CRITICAL FIX FOR 502 BAD GATEWAY ---
+// Keep-Alive Fix
 server.keepAliveTimeout = 120 * 1000;
 server.headersTimeout = 120 * 1000;
 
