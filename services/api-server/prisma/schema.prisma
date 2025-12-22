@@ -1,20 +1,21 @@
-// services/api-server/prisma/schema.prisma
+// 1. Konfigurasi Koneksi Database
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
 
+// 2. Konfigurasi Generator Client
 generator client {
   provider = "prisma-client-js"
 }
 
-datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
-}
-
+// 3. Definisi Model User (Tabel Pengguna)
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  googleId  String   @unique
-  name      String?
-  credits   Int      @default(10)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id        String   @id @default(uuid()) // Primary Key (UUID unik)
+  email     String   @unique              // Email harus unik
+  name      String?                       // Nama (opsional)
+  googleId  String   @unique              // ID Google untuk Login OAuth
+  credits   Int      @default(10)         // Saldo kredit user (Default: 10)
+  createdAt DateTime @default(now())      // Waktu akun dibuat
+  updatedAt DateTime @updatedAt           // Waktu akun terakhir diupdate
 }
