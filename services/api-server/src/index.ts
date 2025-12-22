@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import { verifyGoogleToken, findOrCreateUser, generateSessionToken, authMiddleware, db } from './auth';
 
-// Handle unhandled exceptions to prevent hard crashes without logs
+// Handle unhandled exceptions to prevent hard crashes
 (process as any).on('uncaughtException', (err: any) => {
     console.error('CRITICAL UNCAUGHT EXCEPTION:', err);
 });
@@ -14,7 +14,7 @@ import { verifyGoogleToken, findOrCreateUser, generateSessionToken, authMiddlewa
 
 const app = express();
 
-// Enable Trust Proxy for Railway/Heroku (Important for correct IP logging behind LB)
+// Enable Trust Proxy for Railway/Heroku
 app.set('trust proxy', 1);
 
 // CRITICAL: Railway assigns a random port in process.env.PORT. 
@@ -31,9 +31,9 @@ app.use((req, res, next) => {
     next();
 });
 
-// CORS Configuration - Permissive for troubleshooting
+// CORS Configuration - Allow all to prevent blocking
 app.use(cors({
-    origin: '*', // Allow all origins to fix "Network Error" due to CORS
+    origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -126,10 +126,10 @@ app.post('/credits/deduct', authMiddleware, async (req: any, res) => {
     }
 });
 
-// Start Server without explicit host (allows IPv6/IPv4 binding)
-const server = app.listen(PORT, () => {
+// Start Server - BIND TO 0.0.0.0
+const server = app.listen(PORT, '0.0.0.0', () => {
     console.log("==================================================");
-    console.log(`✅ API Server successfully started on port ${PORT}`);
+    console.log(`✅ API Server successfully started on port ${PORT} (0.0.0.0)`);
     console.log("==================================================");
     
     // Config Checks
@@ -140,17 +140,13 @@ const server = app.listen(PORT, () => {
     }
 
     if (!process.env.DATABASE_URL) {
-        console.log("ℹ️  INFO: DATABASE_URL is not set. Running in Fallback Mode.");
-        console.log("   Data will be stored in local file/memory and reset on redeploy.");
-        console.log("   (This is normal for testing. Add PostgreSQL for persistence.)");
+        console.log("ℹ️  INFO: DATABASE_URL is not set. Running in Fallback Mode (Memory/JSON).");
     } else {
-        console.log("✅ Database: Connected");
+        console.log("✅ Database URL Detected (Prisma Mode)");
     }
 });
 
-// --- CRITICAL FIX FOR 502 BAD GATEWAY ---
-// Increase Keep-Alive timeout to be larger than the Load Balancer's timeout (usually 60s)
-// This prevents the Node server from abruptly closing connections that the LB thinks are open.
+// --- KEEP-ALIVE TIMEOUT FIX FOR 502s ---
 server.keepAliveTimeout = 120 * 1000;
 server.headersTimeout = 120 * 1000;
 
