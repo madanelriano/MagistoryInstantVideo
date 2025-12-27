@@ -12,6 +12,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key';
 // --- DB Abstraction for Fallback ---
 let prismaInstance: any = null;
 let isPrismaInitialized = false;
+let isPrismaDisabled = false; // Kill switch for DB if it fails
 
 const DATA_DIR = path.join((process as any).cwd(), 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
@@ -53,9 +54,17 @@ const writeUsers = (users: any[]) => {
 
 // Lazy Prisma
 const getPrisma = () => {
+    if (isPrismaDisabled) return null;
     if (isPrismaInitialized) return prismaInstance;
     try {
         if (process.env.DATABASE_URL) {
+            // Check if user explicitly wants to force JSON mode
+            if (process.env.USE_JSON_DB === 'true') {
+                console.log("Force JSON DB mode enabled.");
+                isPrismaDisabled = true;
+                return null;
+            }
+
             console.log("Lazy Init: PrismaClient...");
             let pkg;
             try { pkg = require('@prisma/client'); } catch (e) {}
@@ -70,12 +79,27 @@ const getPrisma = () => {
     return prismaInstance;
 };
 
+// Helper to handle Prisma failure and toggle kill switch
+const handlePrismaError = (e: any) => {
+    console.error("⚠️ Database Error:", e.message);
+    // P2021: Table does not exist, P1001: Connection failed
+    if (e.code === 'P2021' || e.code === 'P1001' || (e.message && e.message.includes('does not exist'))) {
+        console.warn("🛑 DATABASE SCHEMA MISSING OR UNREACHABLE. SWITCHING TO JSON-DB FALLBACK.");
+        isPrismaDisabled = true;
+    }
+};
+
 export const db = {
     user: {
         findUnique: async (args: { where: any }) => {
             const prisma = getPrisma();
             if (prisma) {
-                try { return await prisma.user.findUnique(args as any); } catch (e) { console.error("Prisma findUnique failed", e); }
+                try { 
+                    return await prisma.user.findUnique(args as any); 
+                } catch (e) { 
+                    handlePrismaError(e);
+                    // Fallthrough to JSON logic
+                }
             }
             const users = readUsers();
             return users.find(u => 
@@ -87,7 +111,11 @@ export const db = {
         create: async (args: { data: any }) => {
             const prisma = getPrisma();
             if (prisma) {
-                try { return await prisma.user.create(args as any); } catch (e) { console.error("Prisma create failed", e); }
+                try { 
+                    return await prisma.user.create(args as any); 
+                } catch (e) { 
+                    handlePrismaError(e);
+                }
             }
             const users = readUsers();
             const newUser = { id: `user-${Date.now()}-${Math.floor(Math.random() * 1000)}`, ...args.data };
@@ -98,7 +126,11 @@ export const db = {
         update: async (args: { where: { id: string }, data: any }) => {
             const prisma = getPrisma();
             if (prisma) {
-                try { return await prisma.user.update(args as any); } catch (e) { console.error("Prisma update failed", e); }
+                try { 
+                    return await prisma.user.update(args as any); 
+                } catch (e) { 
+                    handlePrismaError(e);
+                }
             }
             const users = readUsers();
             const idx = users.findIndex(u => u.id === args.where.id);
@@ -114,25 +146,22 @@ export const db = {
 };
 
 export const verifyGoogleToken = async (token: string) => {
-  // 1. If Client ID is missing, Log Warning but Allow Soft Decode
   if (!clientId || clientId.length < 5) {
-      console.warn("⚠️ SERVER CONFIG: GOOGLE_CLIENT_ID missing or invalid. Falling back to insecure decode to allow login.");
+      console.warn("⚠️ SERVER CONFIG: GOOGLE_CLIENT_ID missing or invalid. Falling back to insecure decode.");
       const decoded: any = jwt.decode(token);
       if (decoded && decoded.email) return decoded;
       throw new Error("Cannot decode token. Client ID missing on server.");
   }
 
   try {
-      // 2. Try strict verification
       const ticket = await client.verifyIdToken({
           idToken: token,
           audience: clientId,
       });
       return ticket.getPayload();
   } catch (error: any) {
-      // 3. If verification fails (e.g. Audience mismatch because dev used different keys), Fallback to Soft Decode
       console.error("Google Verify Error:", error.message);
-      console.warn("⚠️ Verification failed but proceeding with unsafe decode for compatibility.");
+      console.warn("⚠️ Verification failed. Falling back to insecure decode for compatibility.");
       
       const decoded: any = jwt.decode(token);
       if (decoded && decoded.email) {

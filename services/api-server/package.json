@@ -6,7 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
+    "start": "(npx prisma db push || echo '⚠️ DB Init Failed - Using Memory Mode') && node dist/index.js",
     "dev": "nodemon src/index.ts",
     "postinstall": "echo 'Skipping prisma generate in postinstall for JSON mode'"
   },
