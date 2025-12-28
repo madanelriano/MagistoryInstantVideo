@@ -186,6 +186,11 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
       if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
+  const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
+      // Fallback for broken images in the grid
+      (e.target as HTMLImageElement).src = 'https://placehold.co/400x300/333/999?text=Unavailable';
+  }
+
   const getSearchPlaceholder = () => {
       if (activeTab === 'audio') return `Search ${audioSearchType === 'music' ? 'Music' : 'SFX'}...`;
       if (activeTab === 'media') {
@@ -413,10 +418,20 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
                                             muted 
                                             loop 
                                             playsInline
+                                            onError={(e) => {
+                                                // Fallback if video fails to load, show poster instead or placeholder
+                                                // We can't easily swap to an image tag here without re-rendering, so we hide the video and show the image underneath
+                                                (e.target as HTMLVideoElement).style.display = 'none';
+                                            }}
                                         />
                                     ) : (
                                         <>
-                                            <img src={item.image} className="w-full h-full object-cover" loading="lazy" />
+                                            <img 
+                                                src={item.image} 
+                                                className="w-full h-full object-cover" 
+                                                loading="lazy" 
+                                                onError={handleImageError}
+                                            />
                                             {/* Play Icon Overlay */}
                                             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                                                 <div className="bg-black/40 rounded-full p-1.5 backdrop-blur-[1px]">
@@ -437,7 +452,12 @@ const ResourcePanel: React.FC<ResourcePanelProps> = ({
                                     )}
                                 </>
                                 ) : (
-                                <img src={item.src.medium} className="w-full h-full object-cover" loading="lazy" />
+                                <img 
+                                    src={item.src.medium} 
+                                    className="w-full h-full object-cover" 
+                                    loading="lazy" 
+                                    onError={handleImageError}
+                                />
                                 )}
                                 <div className="absolute inset-0 bg-black/20 group-hover:bg-black/0 transition-colors pointer-events-none"></div>
                                 

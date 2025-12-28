@@ -33,10 +33,50 @@ interface PexelsVideo {
     }
 }
 
+// --- MOCK DATA GENERATORS ---
+const MOCK_VIDEOS = [
+    "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+    "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4",
+    "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4",
+    "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerJoyrides.mp4",
+    "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerMeltdowns.mp4"
+];
+
+function getMockPhotos(query: string, count: number = 15): any[] {
+    const seed = query.replace(/[^a-zA-Z0-9]/g, '') || 'random';
+    return Array.from({ length: count }).map((_, i) => ({
+        id: 999000 + i,
+        src: {
+            medium: `https://picsum.photos/seed/${seed}${i}/400/300`, // Thumbnail
+            large2x: `https://picsum.photos/seed/${seed}${i}/1280/720`, // Full
+            original: `https://picsum.photos/seed/${seed}${i}/1920/1080`
+        },
+        alt: `Mock image for ${query}`,
+        photographer: "Mock Source",
+        _type: 'image'
+    }));
+}
+
+function getMockVideos(query: string, count: number = 10): any[] {
+    const seed = query.replace(/[^a-zA-Z0-9]/g, '') || 'random';
+    return Array.from({ length: count }).map((_, i) => ({
+        id: 888000 + i,
+        image: `https://picsum.photos/seed/${seed}-vid-${i}/400/300`, // Poster
+        video_files: [{
+            quality: 'hd',
+            link: MOCK_VIDEOS[i % MOCK_VIDEOS.length],
+            width: 1280,
+            height: 720
+        }],
+        user: { name: "Mock Source" },
+        _type: 'video'
+    }));
+}
+
 async function pexelsFetch(endpoint: string) {
-    if (!PEXELS_API_KEY || PEXELS_API_KEY === 'YOUR_PEXELS_API_KEY_HERE') {
-        console.error("Pexels API Key is not configured.");
-        return { photos: [], videos: [] };
+    if (!PEXELS_API_KEY || PEXELS_API_KEY.includes('YOUR_PEXELS_API_KEY')) {
+        // Force error to trigger fallback
+        throw new Error("Pexels API Key is not configured.");
     }
 
     const response = await fetch(`${PEXELS_API_BASE}${endpoint}`, {
@@ -44,6 +84,10 @@ async function pexelsFetch(endpoint: string) {
             Authorization: PEXELS_API_KEY
         }
     });
+
+    if (response.status === 429) {
+        throw new Error("Pexels Rate Limit Exceeded");
+    }
 
     if (!response.ok) {
         throw new Error(`Pexels API request failed: ${response.statusText}`);
@@ -56,8 +100,15 @@ async function pexelsFetch(endpoint: string) {
 export async function searchPexelsPhotos(query: string, orientation: PexelsOrientation = 'landscape'): Promise<any[]> {
     try {
         const safeQuery = query.substring(0, 100).trim();
+        if (!safeQuery) return getMockPhotos('random');
+
         const data = await pexelsFetch(`/v1/search?query=${encodeURIComponent(safeQuery)}&per_page=20&orientation=${orientation}`);
         
+        if (!data.photos || data.photos.length === 0) {
+            console.warn("Pexels returned no photos, using mock data.");
+            return getMockPhotos(query);
+        }
+
         return (data.photos || []).map((photo: PexelsPhoto) => ({
             id: photo.id,
             src: {
@@ -69,16 +120,23 @@ export async function searchPexelsPhotos(query: string, orientation: PexelsOrien
             _type: 'image' // Normalized type for app
         }));
     } catch (e) {
-        console.warn("Pexels Photo Search failed:", e);
-        return [];
+        console.warn("Pexels Photo Search failed, switching to Mock Data:", e);
+        return getMockPhotos(query);
     }
 }
 
 export async function searchPexelsVideos(query: string, orientation: PexelsOrientation = 'landscape'): Promise<any[]> {
     try {
         const safeQuery = query.substring(0, 100).trim();
+        if (!safeQuery) return getMockVideos('random');
+
         const data = await pexelsFetch(`/videos/search?query=${encodeURIComponent(safeQuery)}&per_page=20&orientation=${orientation}`);
         
+        if (!data.videos || data.videos.length === 0) {
+             console.warn("Pexels returned no videos, using mock data.");
+             return getMockVideos(query);
+        }
+
         return (data.videos || []).map((video: PexelsVideo) => ({
             id: video.id,
             image: video.image, 
@@ -95,7 +153,7 @@ export async function searchPexelsVideos(query: string, orientation: PexelsOrien
             _type: 'video' // Normalized type for app
         }));
     } catch (e) {
-        console.warn("Pexels Video Search failed:", e);
-        return [];
+        console.warn("Pexels Video Search failed, switching to Mock Data:", e);
+        return getMockVideos(query);
     }
 }
