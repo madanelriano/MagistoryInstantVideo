@@ -57,7 +57,8 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
             if (segment.audioUrl) {
                 segment.audioUrl = await convertBlobUrlToBase64(segment.audioUrl);
             }
-            // CRITICAL: Ensure timings exist for subtitles
+            // CRITICAL: Ensure timings exist for subtitles. 
+            // If wordTimings array is empty but text exists, generate it now.
             if (segment.narration_text && (!segment.wordTimings || segment.wordTimings.length === 0)) {
                 segment.wordTimings = estimateWordTimings(segment.narration_text, segment.duration);
             }

@@ -6,23 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import axios from 'axios';
 import { Buffer } from 'buffer';
 
-declare const require: any;
-
-let ffmpegPath = null;
-let ffprobePath = null;
-
-try {
-    const ffmpegStatic = require('ffmpeg-static');
-    if (ffmpegStatic) ffmpegPath = ffmpegStatic;
-} catch (e) { console.warn("FFmpeg static not found"); }
-
-try {
-    const ffprobeStatic = require('ffprobe-static');
-    if (ffprobeStatic && ffprobeStatic.path) ffprobePath = ffprobeStatic.path;
-} catch (e) { console.warn("FFprobe static not found"); }
-
-if (ffmpegPath) ffmpeg.setFfmpegPath(ffmpegPath);
-if (ffprobePath) ffmpeg.setFfprobePath(ffprobePath);
+const TEMP_DIR = path.join((process as any).cwd(), 'temp');
 
 interface RenderJob {
     title: string;
@@ -31,205 +15,297 @@ interface RenderJob {
     resolution: { width: number; height: number };
 }
 
+// Helper: Get exact duration of a media file using ffprobe
 function getMediaDuration(filePath: string): Promise<number> {
     return new Promise((resolve, reject) => {
         ffmpeg.ffprobe(filePath, (err, metadata) => {
             if (err) return reject(err);
-            resolve(metadata.format.duration || 0);
+            const duration = metadata.format.duration;
+            resolve(duration || 0);
         });
     });
 }
 
-async function saveAsset(url: string, jobId: string, type: string, baseDir: string): Promise<string> {
-    const ext = type === 'image' ? 'jpg' : (type === 'audio' ? 'mp3' : 'mp4');
+async function saveAsset(url: string, jobId: string, type: 'image' | 'video' | 'audio'): Promise<string> {
+    const ext = type === 'image' ? 'jpg' : type === 'video' ? 'mp4' : 'mp3';
     const filename = `${uuidv4()}.${ext}`;
-    const jobDir = path.join(baseDir, jobId);
-    if (!fs.existsSync(jobDir)) fs.mkdirSync(jobDir, { recursive: true });
-    
-    const filePath = path.join(jobDir, filename);
+    const filePath = path.join(TEMP_DIR, jobId, filename);
 
     if (url.startsWith('data:')) {
-        const base64Data = url.split(',')[1];
-        fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+        const matches = url.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+        if (!matches || matches.length !== 3) throw new Error('Invalid input string');
+        const buffer = Buffer.from(matches[2], 'base64');
+        fs.writeFileSync(filePath, buffer);
     } else {
-        const response = await axios({ url, method: 'GET', responseType: 'stream' });
+        const response = await axios({
+            url,
+            method: 'GET',
+            responseType: 'stream'
+        });
         const writer = fs.createWriteStream(filePath);
         response.data.pipe(writer);
-        await new Promise<void>((res, rej) => { 
-            writer.on('finish', () => res()); 
-            writer.on('error', rej); 
+        await new Promise<void>((resolve, reject) => {
+            writer.on('finish', () => resolve());
+            writer.on('error', reject);
         });
     }
     return filePath;
 }
 
-// Generate Advanced Substation Alpha (.ass) for high-quality subtitles
-function createASSFile(filePath: string, segment: any, width: number, height: number) {
-    const style = segment.textOverlayStyle || {};
-    const fontSize = Math.round((style.fontSize || 40) * (height / 720)); // scale font
-    const color = (style.color || '#FFFFFF').replace('#', '');
-    // Convert hex to ASS format (AABBGGRR)
-    const assColor = `&H00${color.substring(4,6)}${color.substring(2,4)}${color.substring(0,2)}`;
+// Generate Advanced Substation Alpha (.ass) subtitle file for perfect sync and styling
+function createASSFile(filePath: string, text: string, timings: any[], duration: number, width: number, height: number) {
+    // Escaping function for ASS text
+    const escapeAss = (str: string) => str.replace(/\{/g, '\\{').replace(/\}/g, '\\}').replace(/\n/g, '\\N');
 
     let content = `[Script Info]
 ScriptType: v4.00+
 PlayResX: ${width}
 PlayResY: ${height}
+WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,${fontSize},${assColor},&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,2,10,10,30,1
+Style: Default,Arial,${Math.round(height * 0.05)},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,0,2,10,10,${Math.round(height * 0.05)},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
-    const fmt = (s: number) => {
-        const d = new Date(s * 1000);
-        return d.toISOString().substr(11, 11).slice(0, -1);
+    const fmtTime = (seconds: number) => {
+        const date = new Date(seconds * 1000);
+        const iso = date.toISOString().substr(11, 11); // HH:mm:ss.ss
+        return iso.slice(0, -1);
     };
 
-    if (!segment.wordTimings || segment.wordTimings.length === 0) {
-        content += `Dialogue: 0,${fmt(0)},${fmt(segment.duration)},Default,,0,0,0,,${segment.narration_text}\n`;
+    // If no timings provided, show full text for duration
+    if (!timings || timings.length === 0) {
+        if (text) {
+            const end = fmtTime(duration);
+            content += `Dialogue: 0,0:00:00.00,${end},Default,,0,0,0,,${escapeAss(text)}\n`;
+        }
     } else {
+        // Group words into lines
+        const MAX_CHARS = 40;
         let currentLine: any[] = [];
-        let charCount = 0;
-        const flush = () => {
+        let currentLen = 0;
+
+        const flushLine = () => {
             if (currentLine.length === 0) return;
-            const start = fmt(currentLine[0].start);
-            const end = fmt(currentLine[currentLine.length-1].end);
-            const text = currentLine.map(w => w.word).join(' ');
-            content += `Dialogue: 0,${start},${end},Default,,0,0,0,,${text}\n`;
+            const start = fmtTime(currentLine[0].start);
+            const end = fmtTime(currentLine[currentLine.length - 1].end);
+            const lineText = currentLine.map(x => x.word).join(' ');
+            content += `Dialogue: 0,${start},${end},Default,,0,0,0,,${escapeAss(lineText)}\n`;
             currentLine = [];
-            charCount = 0;
+            currentLen = 0;
         };
 
-        segment.wordTimings.forEach((w: any) => {
-            if (charCount + w.word.length > 40) flush();
-            currentLine.push(w);
-            charCount += w.word.length + 1;
+        timings.forEach((t: any) => {
+            // Check if adding this word exceeds max chars
+            if (currentLen + t.word.length > MAX_CHARS && currentLine.length > 0) {
+                flushLine();
+            }
+            currentLine.push(t);
+            currentLen += t.word.length + 1;
         });
-        flush();
+        flushLine(); // Flush remaining
     }
+
     fs.writeFileSync(filePath, content);
 }
 
 export async function renderVideo(job: RenderJob, tempDir: string): Promise<string> {
     const jobId = uuidv4();
     const jobDir = path.join(tempDir, jobId);
-    if (!fs.existsSync(jobDir)) fs.mkdirSync(jobDir, { recursive: true });
+    
+    if (!fs.existsSync(jobDir)) {
+        fs.mkdirSync(jobDir, { recursive: true });
+    }
 
-    const finalPath = path.join(jobDir, 'final_output.mp4');
-    const { width, height } = job.resolution || { width: 1280, height: 720 };
+    const outputPath = path.join(jobDir, 'output.mp4');
+    const width = job.resolution?.width || 1280;
+    const height = job.resolution?.height || 720;
 
     try {
         const segmentFiles: string[] = [];
 
-        // 1. Process Segments (Visuals + Narration + Subtitles)
+        // 1. Process Segments (Burn subtitles per segment)
         for (let i = 0; i < job.segments.length; i++) {
             const seg = job.segments[i];
-            const segOut = path.join(jobDir, `seg_${i}.mp4`);
+            const segOutputPath = path.join(jobDir, `seg_${i}.mp4`);
             
-            const clipPath = await saveAsset(seg.media[0].url, jobId, seg.media[0].type, tempDir);
-            let audioPath = seg.audioUrl ? await saveAsset(seg.audioUrl, jobId, 'audio', tempDir) : null;
-            
-            let assPath = null;
-            if (seg.narration_text) {
-                assPath = path.join(jobDir, `sub_${i}.ass`);
-                createASSFile(assPath, seg, width, height);
+            // --- RESOURCE PREPARATION ---
+            let audioPath = null;
+            let exactDuration = seg.duration || 3;
+
+            // Handle Audio
+            if (seg.audioUrl) {
+                audioPath = await saveAsset(seg.audioUrl, jobId, 'audio');
+                try {
+                    // Use audio duration as the master clock if available
+                    const audioDur = await getMediaDuration(audioPath);
+                    if (audioDur > 0) exactDuration = audioDur;
+                } catch (e) {
+                    console.warn(`Failed to probe audio for seg ${i}:`, e);
+                }
             }
 
-            await new Promise<void>((resolve, reject) => {
-                const cmd = ffmpeg(clipPath);
-                if (seg.media[0].type === 'image') cmd.inputOptions(['-loop 1']);
+            // Handle Video/Images
+            const clipInputs: { path: string, type: string, duration: number }[] = [];
+            const numClips = seg.media.length;
+            const perClipDuration = exactDuration / Math.max(1, numClips);
+
+            for (const clip of seg.media) {
+                const clipPath = await saveAsset(clip.url, jobId, clip.type);
+                clipInputs.push({ 
+                    path: clipPath, 
+                    type: clip.type, 
+                    duration: perClipDuration 
+                });
+            }
+
+            // Generate Subtitle File (.ass)
+            let assPath = '';
+            let assFilterString = '';
+            if (seg.narration_text) {
+                assPath = path.join(jobDir, `subs_${i}.ass`);
+                createASSFile(assPath, seg.narration_text, seg.wordTimings, exactDuration, width, height);
                 
-                const filterComplex = [
-                    `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1[v_scaled]`
-                ];
-                let lastVLabel = 'v_scaled';
+                // Escape path specifically for FFmpeg filter
+                // Windows uses backslashes which need quadruple escaping in JS strings for FFmpeg
+                // Simple trick: Convert to forward slashes, handle colons
+                const safeAssPath = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+                assFilterString = `subtitles=filename='${safeAssPath}'`;
+            }
 
-                if (assPath) {
-                    const safeAssPath = assPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-                    filterComplex.push(`[${lastVLabel}]subtitles=filename='${safeAssPath}'[v_sub]`);
-                    lastVLabel = 'v_sub';
-                }
+            // --- FFMPEG SEGMENT RENDER ---
+            await new Promise<void>((resolve, reject) => {
+                const cmd = ffmpeg();
+                const filters: string[] = [];
+                
+                // Input Visuals
+                clipInputs.forEach(c => {
+                    cmd.input(c.path);
+                    if (c.type === 'image') cmd.inputOptions(['-loop 1']);
+                });
 
-                // Handle Silence via Filter instead of -f lavfi input to avoid capability check errors
-                let audioLabel = '1:a';
-                if (!audioPath) {
-                    filterComplex.push(`anullsrc=channel_layout=stereo:sample_rate=44100[a_silence]`);
-                    audioLabel = 'a_silence';
-                }
-
-                cmd.complexFilter(filterComplex);
-                const outOpts = [
-                    `-map [${lastVLabel}]`,
-                    `-map [${audioLabel}]`,
-                    '-c:v libx264', '-preset superfast', '-crf 23',
-                    '-c:a aac', '-b:a 128k',
-                    `-t ${seg.duration}`
-                ];
+                // Input Audio (or Silence)
+                const audioInputIndex = clipInputs.length;
+                let audioLabel = 'a_out';
 
                 if (audioPath) {
                     cmd.input(audioPath);
+                    filters.push(`[${audioInputIndex}:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=1.5[${audioLabel}]`);
+                } else {
+                    // Use filter to generate silence to avoid "lavfi not found" input issues
+                    filters.push(`anullsrc=channel_layout=stereo:sample_rate=44100:duration=${exactDuration}[${audioLabel}]`);
                 }
 
-                cmd.outputOptions(outOpts)
-                   .save(segOut)
-                   .on('end', () => resolve())
-                   .on('error', (err) => {
-                       console.error(`Error rendering segment ${i}:`, err.message);
-                       reject(err);
-                   });
+                // Visual Filters Chain
+                let videoStreamLabel = '';
+
+                // 1. Normalize Scale & Duration
+                clipInputs.forEach((c, idx) => {
+                    const label = `v${idx}`;
+                    filters.push(`[${idx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,trim=duration=${c.duration},setpts=PTS-STARTPTS[${label}]`);
+                });
+
+                // 2. Concatenate Clips Visuals (Simple concat for now, Xfade is complex for dynamic clips)
+                const vLabels = clipInputs.map((_, idx) => `[v${idx}]`).join('');
+                filters.push(`${vLabels}concat=n=${clipInputs.length}:v=1:a=0[v_concat]`);
+                videoStreamLabel = 'v_concat';
+
+                // 3. Burn Subtitles (Last Step)
+                if (assFilterString) {
+                    filters.push(`[${videoStreamLabel}]${assFilterString}[v_final]`);
+                    videoStreamLabel = 'v_final';
+                }
+
+                cmd.complexFilter(filters);
+
+                cmd.outputOptions([
+                    '-map', `[${videoStreamLabel}]`,
+                    '-map', `[${audioLabel}]`,
+                    '-c:v', 'libx264',
+                    '-preset', 'superfast', // Faster rendering
+                    '-c:a', 'aac',
+                    `-t`, `${exactDuration}` // Force exact duration matches audio
+                ]);
+
+                cmd.save(segOutputPath)
+                    .on('end', () => resolve())
+                    .on('error', (err) => {
+                        console.error(`Segment ${i} Render Error:`, err);
+                        reject(err);
+                    });
             });
-            segmentFiles.push(segOut);
+
+            segmentFiles.push(segOutputPath);
         }
 
-        // 2. Concatenate Segments
-        const concatTxt = path.join(jobDir, 'concat.txt');
-        fs.writeFileSync(concatTxt, segmentFiles.map(f => `file '${f}'`).join('\n'));
-        const mergedVisuals = path.join(jobDir, 'merged.mp4');
+        // 2. Concatenate All Segments
+        const concatListPath = path.join(jobDir, 'concat_list.txt');
+        const concatFileContent = segmentFiles.map(f => `file '${f}'`).join('\n');
+        fs.writeFileSync(concatListPath, concatFileContent);
 
-        await new Promise<void>((res, rej) => {
-            ffmpeg().input(concatTxt).inputOptions(['-f concat', '-safe 0'])
-                .outputOptions(['-c copy'])
-                .save(mergedVisuals)
-                .on('end', () => res())
-                .on('error', (err) => rej(err));
+        const mergedVisualsPath = path.join(jobDir, 'merged_visuals.mp4');
+
+        await new Promise<void>((resolve, reject) => {
+            ffmpeg()
+                .input(concatListPath)
+                .inputOptions(['-f', 'concat', '-safe', '0'])
+                .outputOptions(['-c', 'copy'])
+                .save(mergedVisualsPath)
+                .on('end', () => resolve())
+                .on('error', (err) => reject(new Error(`Error concat segments: ${err.message}`)));
         });
 
-        // 3. FINAL MIX (Merge with Global Audio Tracks - Feature: Audio to Video)
+        // 3. Final Mix with Global Audio Tracks
         if (job.audioTracks && job.audioTracks.length > 0) {
-            const mixCmd = ffmpeg(mergedVisuals);
-            const mixFilters = ['[0:a]volume=1.0[main_a]'];
-            const mixLabels = ['[main_a]'];
+            const finalCmd = ffmpeg().input(mergedVisualsPath);
+            let inputCount = 1;
+            const audioMixLabels = ['[0:a]'];
+            
+            const complexFilters: string[] = [];
 
-            for (let j = 0; j < job.audioTracks.length; j++) {
-                const track = job.audioTracks[j];
-                const trackPath = await saveAsset(track.url, jobId, 'audio', tempDir);
-                mixCmd.input(trackPath);
+            for (const track of job.audioTracks) {
+                const trackPath = await saveAsset(track.url, jobId, 'audio');
+                finalCmd.input(trackPath);
                 
-                const delay = Math.round(track.startTime * 1000);
-                const label = `a${j+1}`;
-                mixFilters.push(`[${j+1}:a]adelay=${delay}|${delay},volume=${track.volume || 1.0}[${label}]`);
-                mixLabels.push(`[${label}]`);
+                const delayMs = Math.round(track.startTime * 1000);
+                const volume = track.volume || 0.5;
+                const label = `a${inputCount}`;
+                
+                complexFilters.push(`[${inputCount}:a]adelay=${delayMs}|${delayMs},volume=${volume}[${label}]`);
+                audioMixLabels.push(`[${label}]`);
+                inputCount++;
             }
 
-            mixFilters.push(`${mixLabels.join('')}amix=inputs=${mixLabels.length}:duration=first[out_a]`);
+            // Mix all audios
+            complexFilters.push(`${audioMixLabels.join('')}amix=inputs=${audioMixLabels.length}:duration=first:dropout_transition=0,dynaudnorm[aout]`);
             
-            await new Promise<void>((res, rej) => {
-                mixCmd.complexFilter(mixFilters)
-                    .outputOptions(['-map 0:v', '-map [out_a]', '-c:v copy', '-c:a aac', '-shortest'])
-                    .save(finalPath)
-                    .on('end', () => res())
-                    .on('error', (err) => rej(err));
-            });
-            return finalPath;
-        }
+            finalCmd.complexFilter(complexFilters);
+            finalCmd.outputOptions([
+                '-map', '0:v', 
+                '-map', '[aout]',
+                '-c:v', 'copy', // Don't re-encode video, just copy
+                '-c:a', 'aac',
+                '-shortest'
+            ]);
 
-        return mergedVisuals;
+            await new Promise<void>((resolve, reject) => {
+                finalCmd
+                    .save(outputPath)
+                    .on('end', () => resolve())
+                    .on('error', (err) => reject(new Error(`Error final mix: ${err.message}`)));
+            });
+        } else {
+            // No global audio, just move the merged file
+            fs.renameSync(mergedVisualsPath, outputPath);
+        }
+        
+        return outputPath;
+
     } catch (e) {
-        console.error("Renderer Exception:", e);
         throw e;
     }
 }
