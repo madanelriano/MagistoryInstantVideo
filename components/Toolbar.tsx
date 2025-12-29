@@ -71,7 +71,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
       )
   }
 
-  // TEXT MENU
+  // TEXT MENU (Still accessed if user explicitly calls it, but removed from Main Menu)
   if (activeMenu === 'text') {
       return (
           <div className="flex items-center h-full px-4 gap-6 overflow-x-auto bg-[#111]">
@@ -109,7 +109,7 @@ const Toolbar: React.FC<ToolbarProps> = ({
     <div className="flex items-center justify-between md:justify-center h-full px-4 gap-2 md:gap-8 overflow-x-auto">
         <ToolButton icon={<ScissorsIcon />} label="Edit" onClick={() => setActiveMenu('edit')} />
         <ToolButton icon={<MusicIcon />} label="Audio" onClick={() => setActiveMenu('audio')} />
-        <ToolButton icon={<TextIcon />} label="Text" onClick={() => setActiveMenu('text')} />
+        {/* Text Menu Removed as requested */}
         <ToolButton icon={<TransitionIcon />} label="Transitions" onClick={() => setActiveMenu('transitions')} />
         <ToolButton icon={<LayersIcon />} label="Overlay" onClick={onOpenMediaSearch} />
         <ToolButton icon={<MagicWandIcon className="text-purple-400" />} label="AI Tools" onClick={onOpenAITools} />
