@@ -11,7 +11,7 @@ import AIToolsModal from './AIToolsModal';
 import ExportModal from './ExportModal';
 import VideoPreviewModal from './VideoPreviewModal';
 import { ChevronLeftIcon, ExportIcon, PlayIcon, SaveIcon, ChevronDownIcon } from './icons';
-import { estimateWordTimings, createWavBlobUrl, getAudioDuration } from '../utils/media';
+import { estimateWordTimings, createWavBlobUrl, getAudioDuration, calculateReadingTime } from '../utils/media';
 import { generateSpeechFromText } from '../services/geminiService';
 import { saveProject } from '../services/projectService';
 import LoadingSpinner from './LoadingSpinner';
@@ -193,13 +193,33 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   const handleUpdateSegmentText = (id: string, text: string) => {
       const seg = segments.find(s => s.id === id);
       if(seg) {
-          const timings = estimateWordTimings(text, seg.duration);
-          handleUpdateSegment(id, { narration_text: text, wordTimings: timings });
+          // AUTO DURATION: If there is no existing audio file, estimate duration from text
+          let newDuration = seg.duration;
+          
+          if (!seg.audioUrl) {
+              newDuration = calculateReadingTime(text);
+          }
+
+          // Generate proper timings for current duration
+          const timings = estimateWordTimings(text, newDuration);
+          
+          handleUpdateSegment(id, { 
+              narration_text: text, 
+              wordTimings: timings,
+              duration: newDuration
+          });
       }
   };
 
   const handleUpdateSegmentDuration = (id: string, newDuration: number) => {
-      handleUpdateSegment(id, { duration: newDuration });
+      // When dragging timeline to resize, we need to re-sync subtitles
+      const seg = segments.find(s => s.id === id);
+      const timings = seg?.narration_text ? estimateWordTimings(seg.narration_text, newDuration) : seg?.wordTimings;
+      
+      handleUpdateSegment(id, { 
+          duration: newDuration,
+          wordTimings: timings
+      });
   }
 
   const handleReorderSegments = (newOrder: Segment[]) => {
@@ -353,7 +373,16 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
 
   const handleAIToolsUpdateAudio = (url: string, duration?: number) => {
       if (activeSegmentId) {
+          // If we attach new audio, update duration to match audio exactly
           const updates: Partial<Segment> = { audioUrl: url };
+          if (duration) {
+              updates.duration = duration;
+              // Also resync text timings to new duration
+              const seg = segments.find(s => s.id === activeSegmentId);
+              if (seg?.narration_text) {
+                  updates.wordTimings = estimateWordTimings(seg.narration_text, duration);
+              }
+          }
           handleUpdateSegment(activeSegmentId, updates);
       }
   }
@@ -391,8 +420,10 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
               currentSegmentsState[idx] = {
                   ...seg,
                   audioUrl: wavUrl,
+                  // SYNC DURATION: Set segment length to exactly match audio length
                   duration: duration > 0 ? duration : seg.duration,
                   audioVolume: 1.0,
+                  // Resync word timings to new exact duration
                   wordTimings: estimateWordTimings(seg.narration_text, duration > 0 ? duration : seg.duration)
               };
               setSegments([...currentSegmentsState]);
@@ -477,6 +508,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                             onSeek={handleSeek}
                             aspectRatio={aspectRatio}
                             onUpdateMediaTransform={handleUpdateMediaTransform}
+                            onUpdateTextStyle={(segmentId, style) => handleUpdateSegment(segmentId, { textOverlayStyle: { ...activeSegment?.textOverlayStyle!, ...style } })}
                          />
                     )}
                     
