@@ -19,17 +19,24 @@ export interface WordTiming {
     end: number;   // seconds relative to segment start
 }
 
+export interface MediaTransform {
+    scale: number;
+    x: number;
+    y: number;
+}
+
 export interface MediaClip {
     id: string;
     url: string;
     type: 'image' | 'video';
+    transform?: MediaTransform; // New: Pan and Zoom data
 }
 
 export interface Segment {
   id: string;
   narration_text: string;
   search_keywords_for_media: string;
-  media: MediaClip[]; // Changed from single url/type to array
+  media: MediaClip[]; 
   audioUrl?: string;
   audioVolume?: number; // 0.0 to 1.0
   transition?: TransitionEffect;
@@ -50,11 +57,12 @@ export interface AudioClip {
 }
 
 export interface VideoScript {
-  id?: string; // Optional ID for saving
+  id?: string; 
   title: string;
+  aspectRatio?: 'landscape' | 'portrait'; // New: Project aspect ratio
   backgroundMusicKeywords?: string;
   segments: Segment[];
-  audioTracks?: AudioClip[]; // New global audio tracks
+  audioTracks?: AudioClip[]; 
 }
 
 export interface SavedProject extends VideoScript {

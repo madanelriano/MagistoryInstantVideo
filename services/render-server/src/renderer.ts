@@ -1,3 +1,4 @@
+
 import ffmpeg from 'fluent-ffmpeg';
 import path from 'path';
 import fs from 'fs';
@@ -149,7 +150,7 @@ export async function renderVideo(job: RenderJob, tempDir: string): Promise<stri
             }
 
             // Handle Video/Images
-            const clipInputs: { path: string, type: string, duration: number }[] = [];
+            const clipInputs: { path: string, type: string, duration: number, transform?: any }[] = [];
             const numClips = seg.media.length;
             const perClipDuration = exactDuration / Math.max(1, numClips);
 
@@ -159,7 +160,8 @@ export async function renderVideo(job: RenderJob, tempDir: string): Promise<stri
                 clipInputs.push({ 
                     path: clipPath, 
                     type: clip.type, 
-                    duration: perClipDuration 
+                    duration: perClipDuration,
+                    transform: clip.transform
                 });
             }
 
@@ -201,10 +203,29 @@ export async function renderVideo(job: RenderJob, tempDir: string): Promise<stri
                 // Visual Filters Chain
                 let videoStreamLabel = '';
 
-                // 1. Normalize Scale & Duration
+                // 1. Normalize Scale & Duration & Apply TRANSFORM (Pan & Zoom)
                 clipInputs.forEach((c, idx) => {
                     const label = `v${idx}`;
-                    filters.push(`[${idx}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,trim=duration=${c.duration},setpts=PTS-STARTPTS[${label}]`);
+                    
+                    // Transform logic
+                    // User zoom is `scale` (e.g., 1.5). Default 1.
+                    // User pan is `x, y` pixels relative to container.
+                    const t = c.transform || { scale: 1, x: 0, y: 0 };
+                    const userZoom = t.scale || 1;
+                    const userX = t.x || 0;
+                    const userY = t.y || 0;
+
+                    // Standard "Cover" logic first: Scale to cover the box
+                    // scale='if(gt(a,w/h),-1,w)':'if(gt(a,w/h),h,-1)'
+                    // Then applying userZoom factor
+                    const scaleFilter = `scale='if(gt(a,${width}/${height}),-1,${width})*${userZoom}':'if(gt(a,${width}/${height}),${height},-1)*${userZoom}'`;
+                    
+                    // Crop logic
+                    // Standard crop centers the image: x=(iw-ow)/2, y=(ih-oh)/2
+                    // We apply the negative user offset (because moving image right means crop moves left relative to image)
+                    const cropFilter = `crop=${width}:${height}:(iw-ow)/2 - ${userX}:(ih-oh)/2 - ${userY}`;
+
+                    filters.push(`[${idx}:v]${scaleFilter},${cropFilter},setsar=1,trim=duration=${c.duration},setpts=PTS-STARTPTS[${label}]`);
                 });
 
                 // 2. Concatenate Clips Visuals (Simple concat for now, Xfade is complex for dynamic clips)
