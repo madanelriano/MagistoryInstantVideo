@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { VideoScript, Segment, TransitionEffect, AIToolTab, AudioClip } from '../types';
+import { VideoScript, Segment, TransitionEffect, AIToolTab, AudioClip, MediaTransform } from '../types';
 import Sidebar from './Sidebar';
 import Timeline from './Timeline';
 import PreviewWindow from './PreviewWindow';
@@ -27,6 +27,8 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   const [segments, setSegments] = useState<Segment[]>(initialScript.segments);
   const [audioTracks, setAudioTracks] = useState<AudioClip[]>(initialScript.audioTracks || []);
   const [title, setTitle] = useState(initialScript.title);
+  // Default to landscape if not provided, or respect script property
+  const [aspectRatio, setAspectRatio] = useState<'landscape' | 'portrait'>(initialScript.aspectRatio || 'landscape');
 
   const [activeSegmentId, setActiveSegmentId] = useState<string | null>(segments.length > 0 ? segments[0].id : null);
   const [activeAudioTrackId, setActiveAudioTrackId] = useState<string | null>(null);
@@ -35,8 +37,12 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [timelineZoom, setTimelineZoom] = useState(1);
 
+  // Undo/Redo History
+  const [history, setHistory] = useState<Segment[][]>([]);
+  const [future, setFuture] = useState<Segment[][]>([]);
+
   // Panels & Modals
-  const [activeMenu, setActiveMenu] = useState<string | null>(null); // For Toolbar
+  const [activeMenu, setActiveMenu] = useState<string | null>(null); 
   const [isResourcePanelOpen, setIsResourcePanelOpen] = useState(false);
   const [activeResourceTab, setActiveResourceTab] = useState<string>('media');
   const [resourceAudioType, setResourceAudioType] = useState<'music' | 'sfx' | undefined>(undefined);
@@ -74,6 +80,37 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // --- HISTORY MANAGEMENT ---
+  const pushToHistory = () => {
+      setHistory(prev => [...prev, segments]);
+      setFuture([]); // Clear future on new change
+  };
+
+  const handleUndo = () => {
+      if (history.length === 0) return;
+      const previous = history[history.length - 1];
+      const newHistory = history.slice(0, -1);
+      
+      setFuture(prev => [segments, ...prev]);
+      setSegments(previous);
+      setHistory(newHistory);
+  };
+
+  const handleRedo = () => {
+      if (future.length === 0) return;
+      const next = future[0];
+      const newFuture = future.slice(1);
+      
+      setHistory(prev => [...prev, segments]);
+      setSegments(next);
+      setFuture(newFuture);
+  };
+
+  const updateSegmentsWithHistory = (updater: (prev: Segment[]) => Segment[]) => {
+      pushToHistory();
+      setSegments(updater);
+  };
 
   const animate = (time: number) => {
     if (lastTimeRef.current !== undefined) {
@@ -121,7 +158,8 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
               title,
               segments,
               audioTracks,
-              backgroundMusicKeywords: initialScript.backgroundMusicKeywords
+              backgroundMusicKeywords: initialScript.backgroundMusicKeywords,
+              aspectRatio
           };
           const saved = saveProject(projectData);
           setProjectId(saved.id); 
@@ -138,7 +176,18 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   }
 
   const handleUpdateSegment = (id: string, updates: Partial<Segment>) => {
-      setSegments(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
+      updateSegmentsWithHistory(prev => prev.map(s => s.id === id ? { ...s, ...updates } : s));
+  };
+
+  const handleUpdateMediaTransform = (segmentId: string, clipId: string, transform: MediaTransform) => {
+      // Direct update for responsiveness, consider debouncing history for production
+      setSegments(prev => prev.map(s => {
+          if (s.id !== segmentId) return s;
+          return {
+              ...s,
+              media: s.media.map(m => m.id === clipId ? { ...m, transform } : m)
+          };
+      }));
   };
 
   const handleUpdateSegmentText = (id: string, text: string) => {
@@ -154,11 +203,12 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   }
 
   const handleReorderSegments = (newOrder: Segment[]) => {
-      setSegments(newOrder);
+      updateSegmentsWithHistory(() => newOrder);
   };
   
   const handleSplitSegment = () => {
       if (!activeSegment) return;
+      pushToHistory();
       let elapsed = 0;
       for (const s of segments) {
           if (s.id === activeSegment.id) break;
@@ -192,6 +242,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   }
 
   const handleDelete = () => {
+      pushToHistory();
       if (activeSegmentId) {
           if (segments.length <= 1) return;
           const idx = segments.findIndex(s => s.id === activeSegmentId);
@@ -205,6 +256,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   }
 
   const handleAddSegment = () => {
+      pushToHistory();
       const newSeg: Segment = {
           id: `segment-${Date.now()}`,
           narration_text: "New Scene",
@@ -267,7 +319,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
   }
 
   const handleAutoCaptions = () => {
-      const updatedSegments = segments.map(seg => {
+      updateSegmentsWithHistory(prev => prev.map(seg => {
           if (seg.narration_text) {
               return {
                   ...seg,
@@ -275,8 +327,7 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
               };
           }
           return seg;
-      });
-      setSegments(updatedSegments);
+      }));
   }
 
   const handleOpenAITools = (tab?: AIToolTab) => {
@@ -321,6 +372,8 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
       const proceed = await deductCredits(cost, 'bulk_tts');
       if (!proceed) return;
 
+      pushToHistory(); // Save state before bulk update
+
       setGenerationProgress({ current: 0, total: indicesToProcess.length });
       stopGenerationRef.current = false;
       
@@ -355,11 +408,10 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
 
   const handleApplyTransitionToAll = (effect: TransitionEffect | 'random') => {
       const effects: TransitionEffect[] = ['fade', 'slide', 'zoom'];
-      const newSegments = segments.map(s => ({
+      updateSegmentsWithHistory(prev => prev.map(s => ({
           ...s,
           transition: effect === 'random' ? effects[Math.floor(Math.random() * effects.length)] : effect
-      }));
-      setSegments(newSegments);
+      })));
   }
 
   return (
@@ -423,6 +475,8 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                             totalDuration={totalDuration}
                             onPlayPause={handlePlayPause}
                             onSeek={handleSeek}
+                            aspectRatio={aspectRatio}
+                            onUpdateMediaTransform={handleUpdateMediaTransform}
                          />
                     )}
                     
@@ -477,6 +531,10 @@ const VideoEditor: React.FC<VideoEditorProps> = ({ initialScript }) => {
                         onAutoCaptions={handleAutoCaptions}
                         onUpdateStyle={(id, style) => handleUpdateSegment(id, { textOverlayStyle: { ...activeSegment?.textOverlayStyle!, ...style } })}
                         onApplyTransitionToAll={handleApplyTransitionToAll}
+                        onUndo={handleUndo}
+                        onRedo={handleRedo}
+                        canUndo={history.length > 0}
+                        canRedo={future.length > 0}
                      />
                  </div>
              </div>

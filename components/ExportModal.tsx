@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { Segment, AudioClip } from '../types';
 import LoadingSpinner from './LoadingSpinner';
-import { DownloadIcon } from './icons';
+import { DownloadIcon, ExportIcon } from './icons';
 import { estimateWordTimings } from '../utils/media';
 
 interface ExportModalProps {
@@ -26,6 +26,14 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
     const [quality, setQuality] = useState<ExportQuality>('720p');
     
     const pollIntervalRef = useRef<any>(null);
+
+    // Reset status when modal re-opens
+    useEffect(() => {
+        if (isOpen && status === 'complete') {
+            // Optional: reset on open if you want fresh start, 
+            // but keeping previous success state is usually better UX unless user wants to re-render.
+        }
+    }, [isOpen]);
 
     const convertBlobUrlToBase64 = async (blobUrl: string): Promise<string> => {
         try {
@@ -85,6 +93,7 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
     const handleStartExport = async () => {
         setStatus('preparing');
         setError('');
+        setVideoUrl(null);
         
         const sanitizedUrl = RENDER_URL.replace(/\/$/, '');
 
@@ -182,10 +191,17 @@ const ExportModal: React.FC<ExportModalProps> = ({ isOpen, onClose, title, segme
                         <h3 className="text-xl font-bold text-white mb-2">Video Rendered!</h3>
                         <p className="text-sm text-gray-400 mb-6">Narration and subtitles have been baked into the file.</p>
                         
-                        <a href={videoUrl} download={`${title}_export.mp4`} className="block w-full py-4 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold shadow-lg mb-3 flex items-center justify-center gap-2">
-                            <DownloadIcon className="w-5 h-5" /> Download Video
-                        </a>
-                        <button onClick={handleClose} className="w-full py-2 text-gray-400 hover:text-white">Close</button>
+                        <div className="space-y-3">
+                            <a href={videoUrl} download={`${title}_export.mp4`} className="block w-full py-4 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold shadow-lg flex items-center justify-center gap-2">
+                                <DownloadIcon className="w-5 h-5" /> Download Video
+                            </a>
+                            <button 
+                                onClick={handleStartExport}
+                                className="w-full py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-gray-300 font-semibold text-sm flex items-center justify-center gap-2 transition-colors"
+                            >
+                                <ExportIcon className="w-4 h-4" /> Render Again
+                            </button>
+                        </div>
                      </div>
                 )}
 

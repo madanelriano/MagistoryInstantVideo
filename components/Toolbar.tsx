@@ -1,7 +1,7 @@
 
 import React from 'react';
 import type { Segment, TextOverlayStyle, TransitionEffect } from '../types';
-import { MediaIcon, TextIcon, MusicIcon, EffectsIcon, MagicWandIcon, TrashIcon, ScissorsIcon, VolumeXIcon, LayersIcon, StyleIcon, BackArrowIcon, TransitionIcon } from './icons';
+import { MediaIcon, TextIcon, MusicIcon, EffectsIcon, MagicWandIcon, TrashIcon, ScissorsIcon, VolumeXIcon, LayersIcon, StyleIcon, BackArrowIcon, TransitionIcon, UndoIcon, RedoIcon } from './icons';
 
 interface ToolbarProps {
     activeMenu: string | null;
@@ -17,12 +17,17 @@ interface ToolbarProps {
     onAutoCaptions: () => void;
     onUpdateStyle: (id: string, style: Partial<TextOverlayStyle>) => void;
     onApplyTransitionToAll: (transition: TransitionEffect | 'random') => void;
+    onUndo?: () => void;
+    onRedo?: () => void;
+    canUndo?: boolean;
+    canRedo?: boolean;
 }
 
-const ToolButton: React.FC<{ icon: React.ReactNode; label: string; onClick?: () => void; isActive?: boolean }> = ({ icon, label, onClick, isActive }) => (
+const ToolButton: React.FC<{ icon: React.ReactNode; label: string; onClick?: () => void; isActive?: boolean; disabled?: boolean }> = ({ icon, label, onClick, isActive, disabled }) => (
   <button 
     onClick={onClick}
-    className={`flex flex-col items-center justify-center gap-1 min-w-[64px] h-full transition-colors ${isActive ? 'text-white' : 'text-gray-400 hover:text-gray-200'}`}
+    disabled={disabled}
+    className={`flex flex-col items-center justify-center gap-1 min-w-[64px] h-full transition-colors ${isActive ? 'text-white' : 'text-gray-400'} ${disabled ? 'opacity-30 cursor-not-allowed' : 'hover:text-gray-200'}`}
   >
     <div className={`p-1 rounded-full ${isActive ? 'bg-gray-800' : ''}`}>{icon}</div>
     <span className="text-[10px] font-medium">{label}</span>
@@ -32,7 +37,7 @@ const ToolButton: React.FC<{ icon: React.ReactNode; label: string; onClick?: () 
 const Toolbar: React.FC<ToolbarProps> = ({ 
     activeMenu, setActiveMenu, onOpenMediaSearch, onOpenAudioModal, onOpenAITools, 
     onSplit, onDelete, activeSegment, onUpdateVolume, onUpdateText, onAutoCaptions, onUpdateStyle,
-    onApplyTransitionToAll
+    onApplyTransitionToAll, onUndo, onRedo, canUndo, canRedo
 }) => {
 
   // --- SUB-MENUS ---
@@ -107,9 +112,13 @@ const Toolbar: React.FC<ToolbarProps> = ({
   // MAIN MENU (Default)
   return (
     <div className="flex items-center justify-between md:justify-center h-full px-4 gap-2 md:gap-8 overflow-x-auto">
+        <div className="flex items-center gap-2 mr-4 border-r border-gray-700 pr-4">
+            <ToolButton icon={<UndoIcon />} label="Undo" onClick={onUndo} disabled={!canUndo} />
+            <ToolButton icon={<RedoIcon />} label="Redo" onClick={onRedo} disabled={!canRedo} />
+        </div>
+        
         <ToolButton icon={<ScissorsIcon />} label="Edit" onClick={() => setActiveMenu('edit')} />
         <ToolButton icon={<MusicIcon />} label="Audio" onClick={() => setActiveMenu('audio')} />
-        {/* Text Menu Removed as requested */}
         <ToolButton icon={<TransitionIcon />} label="Transitions" onClick={() => setActiveMenu('transitions')} />
         <ToolButton icon={<LayersIcon />} label="Overlay" onClick={onOpenMediaSearch} />
         <ToolButton icon={<MagicWandIcon className="text-purple-400" />} label="AI Tools" onClick={onOpenAITools} />
