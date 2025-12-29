@@ -211,21 +211,37 @@ function floatTo16BitPCM(output: DataView, offset: number, input: Float32Array) 
     }
 }
 
+/**
+ * Calculates approximate reading time in seconds based on text length and average speech rate.
+ * Helps set initial segment duration automatically.
+ */
+export function calculateReadingTime(text: string): number {
+    const words = text.trim().split(/\s+/).length;
+    // Average speech rate ~150 wpm = 2.5 words/sec. 
+    // We add a small buffer (0.5s) for breathing/transition.
+    const duration = (words / 2.5) + 0.5; 
+    return Math.max(2, parseFloat(duration.toFixed(1))); // Minimum 2 seconds
+}
+
 export function estimateWordTimings(text: string, totalDuration: number): WordTiming[] {
     const words = text.trim().split(/\s+/);
     if (words.length === 0) return [];
 
-    // Advanced estimation that considers punctuation and natural speech rhythm
+    // IMPROVED ALGORITHM: Weighted distribution based on word length and punctuation
+    // This creates a much more natural "karaoke" effect than linear distribution
+    
     const getWeight = (word: string) => {
-        // Remove punctuation to count actual characters spoken
-        const cleanWord = word.replace(/[^a-zA-Z0-9]/g, '');
-        // Base weight: Every word takes at least some time (prevent micro-flashing)
-        let weight = 1.5 + (cleanWord.length * 0.8);
+        // Base weight: Every word takes at least some time
+        let weight = 1.0;
         
-        // Add specific weights for punctuation pauses
-        if (word.includes(',')) weight += 3; // Comma pause
-        if (word.includes('.') || word.includes('?') || word.includes('!')) weight += 5; // Sentence end pause
-        if (word.includes(':') || word.includes(';')) weight += 4;
+        // Add weight for length (longer words take longer to say)
+        const cleanWord = word.replace(/[^a-zA-Z0-9]/g, '');
+        weight += (cleanWord.length * 0.15);
+        
+        // Add specific weights for punctuation pauses (rhythm)
+        if (word.includes(',')) weight += 1.5; // Short pause
+        if (word.includes('.') || word.includes('?') || word.includes('!')) weight += 2.5; // Long pause
+        if (word.includes(':') || word.includes(';')) weight += 2.0;
         
         return weight;
     };
@@ -249,7 +265,7 @@ export function estimateWordTimings(text: string, totalDuration: number): WordTi
         currentTime += duration;
     });
     
-    // Strict clamp: Ensure the last word ends EXACTLY at totalDuration to prevent drift/clipping
+    // Strict clamp: Ensure the last word ends EXACTLY at totalDuration to prevent drift
     if (timings.length > 0) {
         timings[timings.length - 1].end = totalDuration;
     }
@@ -303,7 +319,7 @@ export function generateSubtitleChunks(
     
     // Extend chunk visibility to close gaps for smoother visual
     for(let i=0; i<chunks.length-1; i++) {
-        // If gap is small (< 1.0s), extend current chunk end to next start
+        // If gap is small (< 1.0s), extend current chunk end to next start to prevent flicker
         if (chunks[i+1].start - chunks[i].end < 1.0) {
              chunks[i].end = chunks[i+1].start;
         }

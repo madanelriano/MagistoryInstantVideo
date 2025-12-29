@@ -205,9 +205,13 @@ export async function renderVideo(job: RenderJob, tempDir: string): Promise<stri
                 assPath = path.join(jobDir, `subs_${i}.ass`);
                 
                 // --- SUBTITLE SYNC FIX ---
+                // Scale word timings to match the EXACT audio duration.
+                // The frontend estimates duration (e.g. 5s), but real audio might be 5.2s.
+                // We stretch/shrink the subtitles to fit the real audio duration perfectly.
                 let syncedTimings = seg.wordTimings;
                 if (seg.wordTimings && seg.wordTimings.length > 0) {
                     const estimatedDuration = seg.duration || exactDuration;
+                    // Protect against division by zero
                     if (estimatedDuration > 0 && Math.abs(estimatedDuration - exactDuration) > 0.05) {
                         const ratio = exactDuration / estimatedDuration;
                         syncedTimings = seg.wordTimings.map((t: any) => ({
@@ -215,6 +219,7 @@ export async function renderVideo(job: RenderJob, tempDir: string): Promise<stri
                             start: t.start * ratio,
                             end: t.end * ratio
                         }));
+                        console.log(`Seg ${i}: Resynced subtitles. Ratio: ${ratio.toFixed(3)}`);
                     }
                 }
 
